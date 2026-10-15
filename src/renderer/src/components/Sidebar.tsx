@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { restrictToVerticalAxis } from '@dnd-kit/modifiers'
+import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
 import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
 import { groupOf, moveGroupIn, moveHostIn } from '@shared/order'
@@ -142,7 +142,8 @@ export function Sidebar(p: Props): React.JSX.Element {
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
-          modifiers={[restrictToVerticalAxis]}
+          // Keep the dragged row inside the visible list (it auto-scrolls near the edges).
+          modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
           onDragStart={({ active }) => {
             const id = String(active.id)
             if (id.startsWith(GROUP)) setDraggingGroup(id.slice(GROUP.length))

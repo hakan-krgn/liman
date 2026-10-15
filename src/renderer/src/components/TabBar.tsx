@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Copy, Pencil, X, XSquare } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
-import { restrictToHorizontalAxis } from '@dnd-kit/modifiers'
+import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
 import type { Tab } from '../App'
 
@@ -100,7 +100,7 @@ export function TabBar(p: Props): React.JSX.Element {
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
-          modifiers={[restrictToHorizontalAxis]}
+          modifiers={[restrictToHorizontalAxis, restrictToFirstScrollableAncestor]}
           onDragStart={({ active }) => p.onActivate(String(active.id))}
           onDragEnd={onDragEnd}
         >
