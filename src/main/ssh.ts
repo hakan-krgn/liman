@@ -3,8 +3,9 @@ import type { AnyAuthMethod, KeyboardInteractiveAuthMethod, NextAuthHandler } fr
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, extname, isAbsolute, join, posix, relative, sep } from 'node:path'
+import { basename, join, posix } from 'node:path'
 import { store } from './store'
+import { inside, limiter, pool, safeLocalName, uniqueName } from './util'
 import type {
   ConflictMode,
   PromptRequest,
@@ -836,45 +837,6 @@ export class SessionManager {
 
 // ------------------------------------------------------------------- helpers
 
-/** Caps how many promises created through it run at the same time. */
-function limiter(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
-  let active = 0
-  const waiting: (() => void)[] = []
-  return async (fn) => {
-    if (active >= max) await new Promise<void>((r) => waiting.push(r))
-    active++
-    try {
-      return await fn()
-    } finally {
-      active--
-      waiting.shift()?.()
-    }
-  }
-}
-
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i
-
-/**
- * Turns a name chosen by the remote server into a safe single path component:
- * no separators, no `..`, nothing Windows would reinterpret (ADS, devices).
- */
-function safeLocalName(name: string): string {
-  let n = name.replace(/[\x00-\x1f/\\]/g, '_')
-  if (process.platform === 'win32') {
-    n = n.replace(/[<>:"|?*]/g, '_').replace(/[. ]+$/, '')
-    if (WINDOWS_RESERVED.test(n)) n = '_' + n
-  }
-  return n === '' || n === '.' || n === '..' ? '_' : n
-}
-
-/** Joins `name` onto `dir`, refusing anything that would land outside `dir`. */
-function inside(dir: string, name: string): string {
-  const full = join(dir, name)
-  const rel = relative(dir, full)
-  if (!rel || rel.split(sep)[0] === '..' || isAbsolute(rel)) throw new Error(`Refusing unsafe file name: ${name}`)
-  return full
-}
-
 /** Tags a downloaded file like a browser would, so Windows SmartScreen still checks it. */
 async function markFromInternet(path: string): Promise<void> {
   if (process.platform !== 'win32') return
@@ -929,27 +891,8 @@ function readdirFast(sftp: SFTPWrapper, path: string, depth = 4): Promise<DirIte
   })
 }
 
-/** Runs `fn` over `items` with at most `limit` running at once. */
-async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let i = 0
-  const worker = async (): Promise<void> => {
-    while (i < items.length) await fn(items[i++])
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-}
-
 function exists(sftp: SFTPWrapper, path: string): Promise<boolean> {
   return new Promise((resolve) => sftp.lstat(path, (err) => resolve(!err)))
-}
-
-async function uniqueName(name: string, taken: (n: string) => Promise<boolean>): Promise<string> {
-  if (!(await taken(name))) return name
-  const ext = name.startsWith('.') && name.indexOf('.', 1) < 0 ? '' : extname(name)
-  const stem = name.slice(0, name.length - ext.length)
-  for (let i = 1; ; i++) {
-    const candidate = `${stem} (${i})${ext}`
-    if (!(await taken(candidate))) return candidate
-  }
 }
 
 function expandHome(p: string): string {

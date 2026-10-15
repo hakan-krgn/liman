@@ -1,0 +1,253 @@
+/**
+ * End-to-end tests for the SSH/SFTP engine against a real OpenSSH server.
+ *
+ * They run when LIMAN_TEST_SSH is set ("host:port"); CI starts a
+ * linuxserver/openssh-server container for this. Locally:
+ *
+ *   docker run -d --name liman-ssh -p 127.0.0.1:2222:2222 -e PASSWORD_ACCESS=true \
+ *     -e USER_NAME=tester -e USER_PASSWORD=test123 lscr.io/linuxserver/openssh-server
+ *   LIMAN_TEST_SSH=127.0.0.1:2222 npm test
+ */
+import { Client } from 'ssh2'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { PromptRequest, PromptResponse } from '@shared/types'
+import { SessionManager } from '../../src/main/ssh'
+
+const target = process.env.LIMAN_TEST_SSH
+const [HOST, PORT] = (target ?? '127.0.0.1:2222').split(':')
+const USER = process.env.LIMAN_TEST_USER ?? 'tester'
+const PASSWORD = process.env.LIMAN_TEST_PASSWORD ?? 'test123'
+
+// The engine reads hosts and known keys from the Electron-backed store; swap in memory.
+const state = vi.hoisted(() => ({
+  hosts: new Map<string, Record<string, unknown>>(),
+  known: new Map<string, string>()
+}))
+vi.mock('../../src/main/store', () => ({
+  store: {
+    getHostSecrets: (id: string) => state.hosts.get(id),
+    getKnownHost: (key: string) => state.known.get(key),
+    setKnownHost: (key: string, value: string) => void state.known.set(key, value)
+  }
+}))
+
+function addHost(id: string, extra: Record<string, unknown> = {}): string {
+  state.hosts.set(id, {
+    id,
+    name: id,
+    host: HOST,
+    port: Number(PORT),
+    username: USER,
+    authType: 'password',
+    password: PASSWORD,
+    hasPassword: true,
+    hasPassphrase: false,
+    ...extra
+  })
+  return id
+}
+
+/** Runs a command on the server over a separate connection (test setup only). */
+function remote(cmd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const c = new Client()
+    c.on('ready', () =>
+      c.exec(cmd, (err, ch) => {
+        if (err) return reject(err)
+        let out = ''
+        ch.on('data', (d: Buffer) => (out += d))
+        ch.stderr.on('data', () => {})
+        ch.on('close', () => {
+          c.end()
+          resolve(out)
+        })
+      })
+    )
+    c.on('error', reject)
+    c.connect({ host: HOST, port: Number(PORT), username: USER, password: PASSWORD })
+  })
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+describe.skipIf(!target)('SSH engine against a real server', () => {
+  const statuses = new Map<string, string[]>()
+  const prompts: PromptRequest[] = []
+  let answer: (req: PromptRequest) => PromptResponse = () => null
+  const manager = new SessionManager({
+    send(channel, ...args) {
+      if (channel !== 'ssh:status') return
+      const e = args[0] as { sessionId: string; status: string; message?: string }
+      statuses.set(e.sessionId, [...(statuses.get(e.sessionId) ?? []), e.message ? `${e.status}:${e.message}` : e.status])
+    },
+    async ask(_sessionId, req) {
+      prompts.push(req)
+      return req.kind === 'hostkey' ? true : answer(req)
+    },
+    cancelPrompts() {}
+  })
+
+  const waitFor = async (sessionId: string, pred: (s: string) => boolean, ms = 15_000): Promise<string[]> => {
+    for (let t = 0; t < ms; t += 50) {
+      if ((statuses.get(sessionId) ?? []).some(pred)) break
+      await sleep(50)
+    }
+    return statuses.get(sessionId) ?? []
+  }
+
+  const local = mkdtempSync(join(tmpdir(), 'liman-test-'))
+  const base = `/tmp/liman-test-${process.pid}`
+  const SID = 'main'
+
+  beforeAll(async () => {
+    await remote(`rm -rf ${base} && mkdir -p ${base}`)
+    addHost('main')
+    manager.connect(SID, 'main', 100, 30)
+    expect(await waitFor(SID, (s) => s === 'connected')).toContain('connected')
+    await sleep(1000) // let the login shell start
+  })
+
+  afterAll(async () => {
+    manager.disconnectAll()
+    await remote(`rm -rf ${base}`).catch(() => {})
+    rmSync(local, { recursive: true, force: true })
+  })
+
+  it('asks to trust the host key only on first contact', async () => {
+    expect(prompts.filter((p) => p.kind === 'hostkey')).toHaveLength(1)
+    addHost('again')
+    manager.connect('again', 'again', 80, 24)
+    await waitFor('again', (s) => s === 'connected')
+    expect(prompts.filter((p) => p.kind === 'hostkey')).toHaveLength(1)
+    manager.disconnect('again')
+    expect(await waitFor('again', (s) => s === 'closed')).toContain('closed')
+  })
+
+  it("follows the terminal's working directory, including nested shells", async () => {
+    manager.write(SID, `mkdir -p "${base}/dröp zone" && cd "${base}/dröp zone"\n`)
+    await sleep(700)
+    expect(await manager.getCwd(SID)).toBe(`${base}/dröp zone`)
+    manager.write(SID, `sh\ncd ${base}\n`)
+    await sleep(700)
+    expect(await manager.getCwd(SID)).toBe(base)
+    manager.write(SID, `exit\n`)
+    await sleep(500)
+    expect(await manager.getCwd(SID)).toBe(`${base}/dröp zone`)
+  })
+
+  it('uploads files and folders, skipping local symlinks', async () => {
+    const src = join(local, 'project')
+    mkdirSync(join(src, 'assets'), { recursive: true })
+    writeFileSync(join(src, 'index.html'), '<h1>hi</h1>')
+    writeFileSync(join(src, 'assets', 'big.bin'), Buffer.alloc(3 * 1024 * 1024, 7))
+    const secret = join(local, 'secret')
+    mkdirSync(secret)
+    writeFileSync(join(secret, 'id_rsa'), 'SECRET')
+    symlinkSync(secret, join(src, 'linked'), 'junction')
+
+    const prep = await manager.prepareUpload(SID, [src])
+    expect(prep).toEqual({ dir: `${base}/dröp zone`, conflicts: [] })
+    await manager.upload(SID, [src], prep.dir, 'replace')
+
+    const tree = (await remote(`cd "${prep.dir}" && find . | sort`)).trim().split('\n')
+    expect(tree).toEqual(['.', './project', './project/assets', './project/assets/big.bin', './project/index.html'])
+    expect((await manager.prepareUpload(SID, [src])).conflicts).toEqual(['project'])
+  })
+
+  it('keeps both copies when asked', async () => {
+    const file = join(local, 'notes.txt')
+    writeFileSync(file, 'v1')
+    const dir = `${base}/keep`
+    await remote(`mkdir -p ${dir}`)
+    await manager.upload(SID, [file], dir, 'keepBoth')
+    await manager.upload(SID, [file], dir, 'keepBoth')
+    const names = (await manager.list(SID, dir)).entries.map((e) => e.name)
+    expect(names).toEqual(['notes (1).txt', 'notes.txt'])
+  })
+
+  it('lists large folders completely, in natural order', async () => {
+    await remote(`mkdir -p ${base}/many && cd ${base}/many && for i in $(seq 1 1234); do : > f$i; done && mkdir zdir`)
+    const { path, entries } = await manager.list(SID, `${base}/many/`)
+    expect(path).toBe(`${base}/many`)
+    expect(entries).toHaveLength(1235)
+    expect(entries[0]).toMatchObject({ name: 'zdir', isDir: true })
+    expect(entries.slice(1, 4).map((e) => e.name)).toEqual(['f1', 'f2', 'f3'])
+  })
+
+  it('downloads safely: hostile names stay inside, symlink loops are skipped', async () => {
+    const evil = `${base}/evil`
+    await remote(
+      `mkdir -p ${evil}/sub && printf ok > ${evil}/sub/fine.txt && ` +
+        `printf pwned > '${evil}/..\\..\\escaped.txt' && ln -s . ${evil}/loop && ln -s .. ${evil}/sub/up`
+    )
+    const out = join(local, 'downloads')
+    mkdirSync(out)
+    const result = await manager.download(SID, [evil], out)
+    expect(result).toBe(join(out, 'evil'))
+
+    const files: string[] = []
+    const walk = (d: string): void => {
+      for (const n of readdirSync(d)) {
+        const p = join(d, n)
+        if (n.includes(':')) continue
+        if (statSync(p).isDirectory()) walk(p)
+        else files.push(relative(out, p).split(/[\\/]/).join('/'))
+      }
+    }
+    walk(out)
+    expect(files.sort()).toEqual(['evil/.._.._escaped.txt', 'evil/sub/fine.txt'])
+    expect(existsSync(join(dirname(out), 'escaped.txt'))).toBe(false)
+    expect(readFileSync(join(out, 'evil', 'sub', 'fine.txt'), 'utf8')).toBe('ok')
+  })
+
+  it('gives parallel downloads of the same file different names', async () => {
+    await remote(`printf A > ${base}/same.txt`)
+    const out = join(local, 'same')
+    mkdirSync(out)
+    const [a, b] = await Promise.all([
+      manager.download(SID, [`${base}/same.txt`], out),
+      manager.download(SID, [`${base}/same.txt`], out)
+    ])
+    expect(new Set([a, b])).toEqual(new Set([join(out, 'same.txt'), join(out, 'same (1).txt')]))
+  })
+
+  it('renames, creates and recursively removes', async () => {
+    await manager.mkdir(SID, `${base}/newdir`)
+    await manager.rename(SID, `${base}/same.txt`, `${base}/renamed.txt`)
+    await manager.remove(SID, [`${base}/many`, `${base}/evil`])
+    const names = (await manager.list(SID, base)).entries.map((e) => e.name)
+    expect(names).toEqual(['dröp zone', 'keep', 'newdir', 'renamed.txt'])
+  })
+
+  it('applies a resize that happens while connecting', async () => {
+    addHost('resize')
+    manager.connect('resize', 'resize', 80, 24)
+    manager.resize('resize', 132, 40)
+    await waitFor('resize', (s) => s === 'connected')
+    await sleep(1000)
+    manager.write('resize', `stty size > ${base}/size.txt\n`)
+    await sleep(700)
+    expect((await remote(`cat ${base}/size.txt`)).trim()).toBe('40 132')
+    manager.disconnect('resize')
+  })
+
+  it('stops at the first cancelled password prompt', async () => {
+    addHost('nopw', { password: undefined, hasPassword: false })
+    answer = () => null
+    const before = prompts.length
+    manager.connect('nopw', 'nopw', 80, 24)
+    expect(await waitFor('nopw', (s) => s.startsWith('error'))).toContain('error:Authentication cancelled')
+    expect(prompts.length - before).toBe(1)
+  })
+
+  it('reports a wrong saved password as an authentication failure', async () => {
+    addHost('wrong', { password: 'not-the-password' })
+    answer = (req) => (req.kind === 'auth' ? ['still-wrong'] : null)
+    manager.connect('wrong', 'wrong', 80, 24)
+    const s = await waitFor('wrong', (x) => x.startsWith('error'), 30_000)
+    expect(s.at(-1)).toBe('error:Authentication failed')
+  })
+})

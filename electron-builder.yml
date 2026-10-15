@@ -1,11 +1,15 @@
 appId: com.uxplima.liman
 productName: Liman
+copyright: Copyright © 2026 Ahmet Hakan Kargın
 directories:
   buildResources: build
   output: release
 files:
   - out/**
   - package.json
+# The renderer is fully bundled by Vite; only ssh2 ships as a runtime dependency,
+# and it falls back to pure JS when its optional native addon isn't built.
+npmRebuild: false
 asarUnpack:
   - "**/*.node"
 # Lock down the packaged binary so it can't be reused to run arbitrary code
@@ -16,16 +20,47 @@ electronFuses:
   enableNodeCliInspectArguments: false
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
+
 win:
+  icon: build/icon-win.png
+  # x64 only: Windows on ARM runs it through emulation, and a dual-arch installer is twice the size.
   target:
     - target: nsis
-      arch: [x64, arm64]
+      arch: [x64]
+
+# A classic setup wizard: pick a folder, get Start menu and desktop shortcuts,
+# an uninstaller in "Installed apps", and an option to launch Liman at the end.
 nsis:
   oneClick: false
+  perMachine: false
+  allowElevation: true
   allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Liman
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  artifactName: ${productName}-Setup-${version}.${ext}
+
 mac:
+  icon: build/icon.png
   category: public.app-category.developer-tools
   target:
     - target: dmg
       arch: [universal]
-  hardenedRuntime: true
+  # Ad-hoc signature: required for Apple Silicon to run the app at all. Replace with a
+  # Developer ID identity (and enable hardenedRuntime + notarization) for public releases.
+  identity: "-"
+  hardenedRuntime: false
+  artifactName: ${productName}-${version}-mac-universal.${ext}
+
+# Drag-to-Applications disk image.
+dmg:
+  title: ${productName} ${version}
+  contents:
+    - x: 140
+      y: 190
+    - x: 400
+      y: 190
+      type: link
+      path: /Applications

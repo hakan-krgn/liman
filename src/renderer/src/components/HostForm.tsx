@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { FolderSearch, X } from 'lucide-react'
 import type { AuthType, Host, HostInput } from '@shared/types'
 import { api, confirmDialog, errorMessage } from '../lib'
-import { parseTarget } from './Sidebar'
+import { parseTarget } from '@shared/target'
 
 interface Props {
   host?: Host

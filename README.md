@@ -1,6 +1,20 @@
-# Liman
+<p align="center">
+  <img src="build/logo-256.png" width="112" alt="Liman logo">
+</p>
 
-A minimal SSH + SFTP client for Windows and macOS. Inspired by Termius, focused on being simple to use.
+<h1 align="center">Liman</h1>
+
+<p align="center">
+  A minimal SSH + SFTP client for Windows and macOS. Inspired by Termius, focused on being simple to use.<br>
+  <a href="https://github.com/hakan-krgn/liman/actions/workflows/build-and-test.yml"><img src="https://github.com/hakan-krgn/liman/actions/workflows/build-and-test.yml/badge.svg?branch=master" alt="Build and Test"></a>
+</p>
+
+## Install
+
+Download the latest installer from [Releases](https://github.com/hakan-krgn/liman/releases):
+
+- **Windows:** run `Liman-Setup-<version>.exe`, choose a folder, and Liman is added to the Start menu and desktop. Uninstall it from *Settings → Apps*. The installer isn't code-signed yet, so SmartScreen may ask you to confirm (*More info → Run anyway*).
+- **macOS:** open `Liman-<version>-mac-universal.dmg` and drag Liman into *Applications*. The app is ad-hoc signed but not notarized, so the first time right-click it and choose *Open* (or run `xattr -cr /Applications/Liman.app`).
 
 ## Features
 
@@ -18,9 +32,25 @@ A minimal SSH + SFTP client for Windows and macOS. Inspired by Termius, focused 
 npm install
 npm run dev          # run in development mode
 npm run typecheck
+npm test             # unit tests (+ integration tests when LIMAN_TEST_SSH is set)
 npm run dist:win     # Windows installer (in release/)
 npm run dist:mac     # macOS .dmg — must be run on macOS
 ```
+
+The integration tests in `test/integration` talk to a real OpenSSH server:
+
+```bash
+docker run -d --name liman-ssh -p 127.0.0.1:2222:2222 -e PASSWORD_ACCESS=true \
+  -e USER_NAME=tester -e USER_PASSWORD=test123 lscr.io/linuxserver/openssh-server
+LIMAN_TEST_SSH=127.0.0.1:2222 npm test
+```
+
+## Releases
+
+- **Build and Test** (`.github/workflows/build-and-test.yml`) runs on every push and pull request to `master`: typecheck, unit and integration tests against an OpenSSH container, a production build, and a packaging check on Windows and macOS.
+- **Release Pipeline** (`.github/workflows/release-pipeline.yml`) runs when a GitHub release is published. It repeats the checks, sets the app version from the tag (`v1.2.3` → `1.2.3`), builds the Windows installer and the macOS disk image, and attaches both to the release.
+
+To ship a version: create a release with a tag such as `v0.2.0` on GitHub (*Releases → Draft a new release → Publish*), and the installers appear on it a few minutes later.
 
 ## Shortcuts
 

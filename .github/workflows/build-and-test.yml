@@ -1,0 +1,93 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  # Reused by the release pipeline so installers are only built from a verified tree.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Real OpenSSH server for the integration tests (test/integration).
+      ssh:
+        image: lscr.io/linuxserver/openssh-server:latest
+        ports:
+          - 2222:2222
+        env:
+          PASSWORD_ACCESS: "true"
+          USER_NAME: tester
+          USER_PASSWORD: test123
+    env:
+      LIMAN_TEST_SSH: 127.0.0.1:2222
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # Install scripts are skipped: ssh2's optional native addon isn't needed, and
+      # Electron downloads its binary on demand.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Wait for the test SSH server
+        run: |
+          for _ in $(seq 1 30); do
+            if nc -z 127.0.0.1 2222; then sleep 3; exit 0; fi
+            sleep 2
+          done
+          echo "::error::SSH test server did not start"
+          exit 1
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  package:
+    name: Package check (${{ matrix.name }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            args: --win
+          - name: macOS
+            os: macos-latest
+            args: --mac
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      # Unpacked app only: proves packaging works without spending time on installers.
+      - name: Package
+        run: npx electron-builder ${{ matrix.args }} --dir --publish never

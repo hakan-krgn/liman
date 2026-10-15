@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun } from 'lucide-react'
 import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
+import { parseTarget } from '@shared/target'
 import { Logo } from './Logo'
 
 interface Props {
@@ -17,13 +18,6 @@ interface Props {
 const nextTheme: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' }
 const themeIcon = { system: Monitor, light: Sun, dark: Moon }
 const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' }
-
-/** "user@host:port" -> host fields, for quick connect from the search box. */
-export function parseTarget(text: string): Partial<HostInput> | null {
-  const m = text.trim().match(/^(?:([^@\s]+)@)?([\w.-]+|\[[\da-f:]+\])(?::(\d+))?$/i)
-  if (!m || !m[2].includes('.') && !m[1]) return null
-  return { username: m[1] ?? '', host: m[2].replace(/^\[|\]$/g, ''), port: m[3] ? Number(m[3]) : 22 }
-}
 
 export function Sidebar(p: Props): React.JSX.Element {
   const [query, setQuery] = useState('')
