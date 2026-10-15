@@ -1,6 +1,6 @@
 import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { inside, limiter, pool, safeLocalName, uniqueName } from '../../src/main/util'
+import { inside, isNewerVersion, limiter, pool, safeLocalName, uniqueName } from '../../src/main/util'
 
 describe('safeLocalName', () => {
   it('keeps ordinary names', () => {
@@ -114,5 +114,26 @@ describe('limiter and pool', () => {
 
   it('pool handles an empty list', async () => {
     await expect(pool([], 4, async () => {})).resolves.toBeUndefined()
+  })
+})
+
+describe('isNewerVersion', () => {
+  it('compares major, minor and patch numerically', () => {
+    expect(isNewerVersion('0.2.0', '0.1.0')).toBe(true)
+    expect(isNewerVersion('0.10.0', '0.9.9')).toBe(true)
+    expect(isNewerVersion('1.0.0', '0.99.99')).toBe(true)
+    expect(isNewerVersion('0.1.0', '0.1.0')).toBe(false)
+    expect(isNewerVersion('0.1.0', '0.2.0')).toBe(false)
+  })
+
+  it('accepts a leading v and missing parts', () => {
+    expect(isNewerVersion('v0.2.0', '0.1.9')).toBe(true)
+    expect(isNewerVersion('1.2', '1.1.9')).toBe(true)
+  })
+
+  it('ranks a release above its pre-releases', () => {
+    expect(isNewerVersion('1.0.0', '1.0.0-beta.2')).toBe(true)
+    expect(isNewerVersion('1.0.0-beta.2', '1.0.0')).toBe(false)
+    expect(isNewerVersion('1.0.0-beta.2', '1.0.0-beta.1')).toBe(true)
   })
 })

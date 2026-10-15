@@ -21,6 +21,8 @@ Download the latest installer from [Releases](https://github.com/hakan-krgn/lima
 - **Windows:** run `Liman-Setup-<version>.exe`, choose a folder, and Liman is added to the Start menu and desktop. Uninstall it from *Settings → Apps*. The installer isn't code-signed yet, so SmartScreen may ask you to confirm (*More info → Run anyway*).
 - **macOS:** open `Liman-<version>-mac-universal.dmg` and drag Liman into *Applications*. The app is ad-hoc signed but not notarized, so the first time right-click it and choose *Open* (or run `xattr -cr /Applications/Liman.app`).
 
+**Updates:** Liman checks GitHub Releases at startup and every few hours. On Windows the new version downloads in the background and installs when you click *Restart to update* (or the next time you quit). On macOS you get a notice with a link to the download. Your hosts, passwords and settings are kept across updates.
+
 ## Drop files onto the terminal
 
 Drag anything from your desktop onto a terminal: Liman finds the folder that shell is in right now and uploads there. The SFTP panel follows along, so the new files show up as soon as they land.

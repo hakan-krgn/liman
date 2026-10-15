@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { store } from './store'
 import { SessionManager } from './ssh'
+import { Updater } from './updater'
 import type { ConflictMode, HostInput, PromptResponse, Settings } from '@shared/types'
 
 // Development-only switches; a packaged build ignores them so nobody can point
@@ -42,6 +43,10 @@ const sessions = new SessionManager({
   cancelPrompts(sessionId) {
     resolvePrompts((s) => s === sessionId)
   }
+})
+
+const updater = new Updater((status) => {
+  if (win && !win.isDestroyed()) win.webContents.send('update:status', status)
 })
 
 function isDark(): boolean {
@@ -187,6 +192,9 @@ function registerIpc(): void {
     })
     return res.canceled ? null : res.filePaths[0]
   })
+  handle('update:get', () => updater.current)
+  on('update:install', () => updater.install())
+  on('update:open', () => updater.openDownload())
   on('shell:showItem', (path) => {
     if (revealable.has(str(path))) shell.showItemInFolder(str(path))
   })
@@ -238,6 +246,7 @@ app.whenReady().then(() => {
   setupPermissions()
   registerIpc()
   createWindow()
+  updater.start()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

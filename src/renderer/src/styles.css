@@ -437,6 +437,44 @@ code {
   flex-direction: column;
   gap: 8px;
 }
+.update-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+}
+.update-notice.ready {
+  cursor: pointer;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-soft);
+}
+.update-notice.ready:hover {
+  border-color: var(--accent);
+}
+.update-notice svg {
+  flex-shrink: 0;
+}
+.update-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.update-text strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.update-text span {
+  color: var(--muted);
+}
 .foot-tools {
   display: flex;
   justify-content: space-between;

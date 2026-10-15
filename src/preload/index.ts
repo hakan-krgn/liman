@@ -8,7 +8,8 @@ import type {
   RemoteEntry,
   SessionStatusEvent,
   Settings,
-  Transfer
+  Transfer,
+  UpdateStatus
 } from '@shared/types'
 
 function on<T extends unknown[]>(channel: string, cb: (...args: T) => void): () => void {
@@ -65,6 +66,13 @@ const api = {
   onPromptCancel: (cb: (id: string) => void) => on('prompt:cancel', cb),
 
   pickKey: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickKey'),
+
+  getUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:get'),
+  onUpdate: (cb: (s: UpdateStatus) => void) => on('update:status', cb),
+  /** Windows: restart into the downloaded update. */
+  installUpdate: (): void => ipcRenderer.send('update:install'),
+  /** macOS: open the release page of the new version. */
+  openUpdate: (): void => ipcRenderer.send('update:open'),
   showItem: (path: string): void => ipcRenderer.send('shell:showItem', path),
   /** Absolute path of a file dropped from the OS (Explorer / Finder / desktop). */
   pathForFile: (file: File): string => webUtils.getPathForFile(file)

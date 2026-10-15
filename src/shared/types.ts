@@ -86,3 +86,12 @@ export type PromptRequest =
     }
 
 export type PromptResponse = boolean | string[] | null
+
+/** What the app knows about a newer release. */
+export type UpdateStatus =
+  | { state: 'idle' }
+  /** A newer version exists; on macOS it is downloaded from the release page. */
+  | { state: 'available'; version: string; url: string }
+  | { state: 'downloading'; version: string; percent: number }
+  /** Downloaded and verified; installs on restart (or when the app quits). */
+  | { state: 'ready'; version: string }

@@ -1,6 +1,12 @@
 appId: com.uxplima.liman
 productName: Liman
 copyright: Copyright © 2026 Ahmet Hakan Kargın
+# Where the in-app updater looks for new versions. Uploading is done by the
+# release workflow (electron-builder itself always runs with --publish never).
+publish:
+  provider: github
+  owner: hakan-krgn
+  repo: liman
 directories:
   buildResources: build
   output: release

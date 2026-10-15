@@ -36,7 +36,8 @@ jobs:
           - name: Windows
             os: windows-latest
             args: --win
-            files: release/*.exe
+            # latest.yml + blockmap let installed apps find and verify the update.
+            files: release/*.exe release/*.exe.blockmap release/latest.yml
           - name: macOS
             os: macos-latest
             args: --mac

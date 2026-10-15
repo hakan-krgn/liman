@@ -60,3 +60,20 @@ export async function uniqueName(name: string, taken: (n: string) => Promise<boo
     if (!(await taken(candidate))) return candidate
   }
 }
+
+/** True when version `a` is newer than `b` (both `x.y.z`, an optional `v` and pre-release tag allowed). */
+export function isNewerVersion(a: string, b: string): boolean {
+  const parse = (v: string): [number[], string] => {
+    const [core, pre = ''] = v.trim().replace(/^v/i, '').split('-', 2)
+    return [core.split('.').map((n) => Number.parseInt(n, 10) || 0), pre]
+  }
+  const [ca, pa] = parse(a)
+  const [cb, pb] = parse(b)
+  for (let i = 0; i < 3; i++) {
+    const d = (ca[i] ?? 0) - (cb[i] ?? 0)
+    if (d !== 0) return d > 0
+  }
+  // 1.2.0 is newer than 1.2.0-beta; two pre-releases compare as text.
+  if (!pa !== !pb) return !pa
+  return pa > pb
+}

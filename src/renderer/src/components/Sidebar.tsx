@@ -4,6 +4,7 @@ import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
 import { parseTarget } from '@shared/target'
 import { api, errorMessage, showDialog } from '../lib'
 import { Logo } from './Logo'
+import { UpdateNotice } from './UpdateNotice'
 
 interface Props {
   hosts: Host[]
@@ -265,6 +266,7 @@ export function Sidebar(p: Props): React.JSX.Element {
       </nav>
 
       <div className="sidebar-foot">
+        <UpdateNotice />
         <button className="btn primary block" onClick={() => p.onNew()}>
           <Plus size={15} /> New host
         </button>
