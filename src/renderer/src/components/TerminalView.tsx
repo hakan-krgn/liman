@@ -62,6 +62,9 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
       scrollback: 10000,
       allowProposedApi: true,
       macOptionIsMeta: true,
+      // In programs that capture the mouse (Claude Code, vim, htop), Shift-drag (Option-drag
+      // on macOS) still selects text in the terminal itself.
+      macOptionClickForcesSelection: true,
       theme: terminalThemes[theme]
     })
     const f = new FitAddon()
@@ -110,6 +113,21 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
         e.preventDefault()
         paste()
         return false
+      }
+      return true
+    })
+
+    // OSC 52: programs on the server (Claude Code, tmux, vim, …) copy to the local
+    // clipboard this way, e.g. after selecting text with the mouse. Write-only:
+    // clipboard queries ("?") are ignored so a server can never read it.
+    t.parser.registerOscHandler(52, (data) => {
+      const payload = data.slice(data.indexOf(';') + 1)
+      if (!data.includes(';') || !payload || payload === '?' || payload.length > 1_400_000) return true
+      try {
+        const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+        api.copyText(new TextDecoder().decode(bytes))
+      } catch {
+        /* not valid base64 */
       }
       return true
     })

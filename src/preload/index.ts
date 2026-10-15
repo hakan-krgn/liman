@@ -74,6 +74,8 @@ const api = {
   /** macOS: open the release page of the new version. */
   openUpdate: (): void => ipcRenderer.send('update:open'),
   showItem: (path: string): void => ipcRenderer.send('shell:showItem', path),
+  /** Puts text on the system clipboard (used for OSC 52 copies from remote programs). */
+  copyText: (text: string): void => ipcRenderer.send('clipboard:write', text),
   /** Absolute path of a file dropped from the OS (Explorer / Finder / desktop). */
   pathForFile: (file: File): string => webUtils.getPathForFile(file)
 }

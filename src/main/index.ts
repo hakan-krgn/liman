@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -208,6 +208,11 @@ function registerIpc(): void {
   handle('update:get', () => updater.current)
   on('update:install', () => updater.install())
   on('update:open', () => updater.openDownload())
+  // Text a remote program copied (OSC 52). Write-only: nothing ever reads the clipboard for a server.
+  on('clipboard:write', (text) => {
+    const value = str(text)
+    if (value.length <= 1_000_000) clipboard.writeText(value)
+  })
   on('shell:showItem', (path) => {
     if (revealable.has(str(path))) shell.showItemInFolder(str(path))
   })
