@@ -26,6 +26,8 @@ interface Session {
   client: Client
   stream?: ClientChannel
   sftp?: Promise<SFTPWrapper>
+  helper?: Promise<ClientChannel>
+  helperQueue: Promise<unknown>
   /** PID of the interactive shell on the remote host (when it could be determined). */
   shellPid?: number
   /** Last directory reported by the shell through OSC 7, if the shell emits it. */
@@ -40,6 +42,17 @@ interface ActiveTransfer extends Transfer {
 }
 
 const CONNECT_TIMEOUT = 20_000
+/** Files transferred at the same time within one upload/download. */
+const PARALLEL = 8
+
+const S_IFMT = 0o170000
+const S_IFDIR = 0o040000
+const S_IFLNK = 0o120000
+
+type FileJob = { from: string; to: string; size: number }
+
+/** Natural order: file2 before file10. */
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 /**
  * Starts the user's login shell through /bin/sh so we learn its PID first.
@@ -78,7 +91,7 @@ export class SessionManager {
     if (!host) return this.status({ sessionId, status: 'error', message: 'Host not found' })
 
     const client = new Client()
-    const session: Session = { id: sessionId, client, scan: '', closed: false }
+    const session: Session = { id: sessionId, client, scan: '', closed: false, helperQueue: Promise.resolve() }
     this.sessions.set(sessionId, session)
     this.status({ sessionId, status: 'connecting' })
 
@@ -112,6 +125,8 @@ export class SessionManager {
     client.on('banner', (msg) => this.bridge.send('ssh:data', sessionId, Buffer.from(msg.replace(/\r?\n/g, '\r\n'))))
     client.on('ready', () => {
       clearTimeout(timer)
+      // Send keystrokes immediately instead of letting Nagle batch them.
+      client.setNoDelay(true)
       this.openShell(session, cols, rows)
     })
     client.on('error', (err: Error & { level?: string }) => {
@@ -240,6 +255,9 @@ export class SessionManager {
       stream.on('data', onData)
       stream.stderr.on('data', onData)
       stream.on('close', () => session.client.end())
+      // Warm up the channels used for browsing and cwd lookups so the first use is instant.
+      this.sftp(session).catch(() => {})
+      this.helper(session).catch(() => {})
     }
     session.client.exec(SHELL_BOOTSTRAP, { pty }, (err, stream) => {
       if (!err) return attach(stream)
@@ -303,21 +321,64 @@ export class SessionManager {
 
   // --------------------------------------------------------------- cwd / exec
 
-  private exec(session: Session, command: string, stdin?: string): Promise<{ code: number; out: string }> {
-    return new Promise((resolve, reject) => {
-      session.client.exec(command, (err, ch) => {
-        if (err) return reject(err)
-        let out = ''
-        const t = setTimeout(() => ch.close(), 5000)
-        ch.on('data', (d: Buffer) => (out += d.toString('utf8')))
-        ch.stderr.on('data', () => {})
-        ch.on('close', (code: number) => {
-          clearTimeout(t)
-          resolve({ code: code ?? -1, out })
+  /**
+   * A long-lived `/bin/sh` channel for small helper commands. Opening a fresh
+   * exec channel per query costs extra round trips; this one is reused.
+   */
+  private helper(s: Session): Promise<ClientChannel> {
+    if (!s.helper) {
+      s.helper = new Promise((resolve, reject) =>
+        s.client.exec('/bin/sh', (err, ch) => {
+          if (err) {
+            s.helper = undefined
+            return reject(err)
+          }
+          ch.stderr.on('data', () => {})
+          ch.on('close', () => (s.helper = undefined))
+          resolve(ch)
         })
-        if (stdin !== undefined) ch.end(stdin)
+      )
+    }
+    return s.helper
+  }
+
+  /** Runs a POSIX sh snippet on the helper channel, one at a time. */
+  private run(s: Session, script: string): Promise<{ code: number; out: string }> {
+    const job = s.helperQueue.then(async () => {
+      const ch = await this.helper(s)
+      const marker = `__liman_${randomUUID().slice(0, 8)}__`
+      return new Promise<{ code: number; out: string }>((resolve, reject) => {
+        let buf = ''
+        const done = (): void => {
+          clearTimeout(timer)
+          ch.off('data', onData)
+          ch.off('close', onClose)
+        }
+        const onData = (d: Buffer): void => {
+          buf += d.toString('utf8')
+          const i = buf.indexOf(marker)
+          const m = i >= 0 ? buf.slice(i + marker.length).match(/^ (\d+)\n/) : null
+          if (!m) return
+          done()
+          resolve({ code: Number(m[1]), out: buf.slice(0, i) })
+        }
+        const onClose = (): void => {
+          done()
+          reject(new Error('Helper channel closed'))
+        }
+        const timer = setTimeout(() => {
+          done()
+          ch.close()
+          reject(new Error('Helper command timed out'))
+        }, 5000)
+        ch.on('data', onData)
+        ch.on('close', onClose)
+        // The subshell keeps `exit` in the script from ending the helper itself.
+        ch.write(`(\n${script}\n)\nprintf '\\n${marker} %s\\n' $?\n`)
       })
     })
+    s.helperQueue = job.catch(() => {})
+    return job
   }
 
   /** Best-effort current directory of the terminal's shell. */
@@ -325,7 +386,7 @@ export class SessionManager {
     const s = this.get(sessionId)
     if (s.shellPid) {
       try {
-        const { code, out } = await this.exec(s, '/bin/sh -s', cwdScript(s.shellPid))
+        const { code, out } = await this.run(s, cwdScript(s.shellPid))
         const dir = out.trim().split('\n')[0]
         if (code === 0 && dir.startsWith('/')) return dir
       } catch {
@@ -338,17 +399,13 @@ export class SessionManager {
 
   // -------------------------------------------------------------------- sftp
 
+  /** Shared SFTP channel for browsing. Transfers open their own (see `transfer`). */
   private sftp(s: Session): Promise<SFTPWrapper> {
     if (!s.sftp) {
-      s.sftp = new Promise((resolve, reject) =>
-        s.client.sftp((err, sftp) => {
-          if (err) {
-            s.sftp = undefined
-            return reject(err)
-          }
-          sftp.on('close', () => (s.sftp = undefined))
-          resolve(sftp)
-        })
+      s.sftp = openSftp(s.client)
+      s.sftp.then(
+        (sftp) => sftp.on('close', () => (s.sftp = undefined)),
+        () => (s.sftp = undefined)
       )
     }
     return s.sftp
@@ -361,26 +418,27 @@ export class SessionManager {
 
   async list(sessionId: string, dir: string): Promise<{ path: string; entries: RemoteEntry[] }> {
     const sftp = await this.sftp(this.get(sessionId))
-    const path = await promisify<string>((cb) => sftp.realpath(dir, cb))
-    const items = await promisify<{ filename: string; attrs: { mode: number; size: number; mtime: number } }[]>(
-      (cb) => sftp.readdir(path, cb)
-    )
+    // Absolute paths need no server round trip to resolve.
+    const path = dir.startsWith('/')
+      ? posix.normalize(dir).replace(/(.)\/+$/, '$1')
+      : await promisify<string>((cb) => sftp.realpath(dir, cb))
+    const items = await readdirFast(sftp, path)
     const entries = await Promise.all(
       items.map(async (it): Promise<RemoteEntry> => {
         const full = posix.join(path, it.filename)
-        const type = it.attrs.mode & 0o170000
-        let isDir = type === 0o040000
-        const isLink = type === 0o120000
+        const type = it.attrs.mode & S_IFMT
+        let isDir = type === S_IFDIR
+        const isLink = type === S_IFLNK
         if (isLink) {
           // Follow symlinks so linked folders can be opened.
           isDir = await promisify<{ mode: number }>((cb) => sftp.stat(full, cb))
-            .then((st) => (st.mode & 0o170000) === 0o040000)
+            .then((st) => (st.mode & S_IFMT) === S_IFDIR)
             .catch(() => false)
         }
         return { name: it.filename, path: full, isDir, isLink, size: it.attrs.size, mtime: it.attrs.mtime }
       })
     )
-    entries.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name))
+    entries.sort((a, b) => Number(b.isDir) - Number(a.isDir) || byName.compare(a.name, b.name))
     return { path, entries }
   }
 
@@ -396,17 +454,17 @@ export class SessionManager {
 
   async remove(sessionId: string, paths: string[]): Promise<void> {
     const sftp = await this.sftp(this.get(sessionId))
-    const rm = async (p: string): Promise<void> => {
-      const st = await promisify<{ mode: number }>((cb) => sftp.lstat(p, cb))
-      if ((st.mode & 0o170000) === 0o040000) {
-        const items = await promisify<{ filename: string }[]>((cb) => sftp.readdir(p, cb))
-        for (const it of items) await rm(posix.join(p, it.filename))
+    const rm = async (p: string, mode?: number): Promise<void> => {
+      mode ??= (await promisify<{ mode: number }>((cb) => sftp.lstat(p, cb))).mode
+      if ((mode & S_IFMT) === S_IFDIR) {
+        const items = await readdirFast(sftp, p)
+        await pool(items, PARALLEL, (it) => rm(posix.join(p, it.filename), it.attrs.mode))
         await promisify<void>((cb) => sftp.rmdir(p, cb))
       } else {
         await promisify<void>((cb) => sftp.unlink(p, cb))
       }
     }
-    for (const p of paths) await rm(p)
+    await Promise.all(paths.map((p) => rm(p)))
   }
 
   /** Resolves the upload target and reports which top-level names already exist there. */
@@ -416,99 +474,127 @@ export class SessionManager {
     remoteDir?: string
   ): Promise<{ dir: string; conflicts: string[] }> {
     const s = this.get(sessionId)
-    const dir = remoteDir ?? (await this.getCwd(sessionId))
-    const sftp = await this.sftp(s)
-    const conflicts: string[] = []
-    for (const p of localPaths) {
-      const name = basename(p)
-      if (await exists(sftp, posix.join(dir, name))) conflicts.push(name)
-    }
-    return { dir, conflicts }
+    const [dir, sftp] = await Promise.all([remoteDir ?? this.getCwd(sessionId), this.sftp(s)])
+    const names = localPaths.map((p) => basename(p))
+    const taken = await Promise.all(names.map((n) => exists(sftp, posix.join(dir, n))))
+    return { dir, conflicts: names.filter((_, i) => taken[i]) }
   }
 
   async upload(sessionId: string, localPaths: string[], remoteDir: string, mode: ConflictMode): Promise<void> {
     const s = this.get(sessionId)
-    const sftp = await this.sftp(s)
+    const browse = await this.sftp(s)
 
-    type Item = { local: string; remote: string; isDir: boolean; size: number }
-    const plan: Item[] = []
+    const dirs: string[] = []
+    const files: FileJob[] = []
     const walk = async (local: string, remote: string): Promise<void> => {
       const st = await fsp.stat(local)
       if (st.isDirectory()) {
-        plan.push({ local, remote, isDir: true, size: 0 })
+        dirs.push(remote)
         for (const name of await fsp.readdir(local)) await walk(join(local, name), posix.join(remote, name))
       } else if (st.isFile()) {
-        plan.push({ local, remote, isDir: false, size: st.size })
+        files.push({ from: local, to: remote, size: st.size })
       }
     }
     for (const p of localPaths) {
       let name = basename(p)
-      if (mode === 'keepBoth') name = await uniqueName(name, (n) => exists(sftp, posix.join(remoteDir, n)))
+      if (mode === 'keepBoth') name = await uniqueName(name, (n) => exists(browse, posix.join(remoteDir, n)))
       await walk(p, posix.join(remoteDir, name))
     }
 
     const label = localPaths.length === 1 ? basename(localPaths[0]) : `${localPaths.length} items`
-    const t = this.startTransfer(sessionId, 'up', label, remoteDir, plan.reduce((n, i) => n + i.size, 0), sftp)
-    try {
-      for (const item of plan) {
-        if (t.cancelled) break
-        if (item.isDir) {
-          if (!(await exists(sftp, item.remote))) await promisify<void>((cb) => sftp.mkdir(item.remote, cb))
-          continue
-        }
-        const base = t.done
-        await promisify<void>((cb) =>
-          sftp.fastPut(item.local, item.remote, { step: (sent) => this.progress(t, base + sent) }, cb)
-        )
-        this.progress(t, base + item.size, true)
+    await this.transfer(s, 'up', label, remoteDir, files, async (sftp) => {
+      // Parents come before children in `dirs`, so creating them in order is safe.
+      for (const d of dirs) {
+        await promisify<void>((cb) => sftp.mkdir(d, cb)).catch(async (err) => {
+          const st = await promisify<{ mode: number }>((cb) => sftp.stat(d, cb)).catch(() => null)
+          if (!st || (st.mode & S_IFMT) !== S_IFDIR) throw err
+        })
       }
-      this.finish(t)
-    } catch (err) {
-      this.finish(t, err as Error)
-    }
+    })
   }
 
   async download(sessionId: string, remotePaths: string[], localDir = join(homedir(), 'Downloads')): Promise<void> {
-    const sftp = await this.sftp(this.get(sessionId))
+    const s = this.get(sessionId)
+    const browse = await this.sftp(s)
 
-    type Item = { remote: string; local: string; isDir: boolean; size: number }
-    const plan: Item[] = []
-    const walk = async (remote: string, local: string): Promise<void> => {
-      const st = await promisify<{ mode: number; size: number }>((cb) => sftp.stat(remote, cb))
-      if ((st.mode & 0o170000) === 0o040000) {
-        plan.push({ remote, local, isDir: true, size: 0 })
-        const items = await promisify<{ filename: string }[]>((cb) => sftp.readdir(remote, cb))
-        for (const it of items) await walk(posix.join(remote, it.filename), join(local, it.filename))
+    const dirs: string[] = []
+    const files: FileJob[] = []
+    const walk = async (remote: string, local: string, mode: number, size: number): Promise<void> => {
+      if ((mode & S_IFMT) === S_IFLNK) {
+        const st = await promisify<{ mode: number; size: number }>((cb) => browse.stat(remote, cb))
+        mode = st.mode
+        size = st.size
+      }
+      if ((mode & S_IFMT) === S_IFDIR) {
+        dirs.push(local)
+        const items = await readdirFast(browse, remote)
+        await pool(items, PARALLEL, (it) =>
+          walk(posix.join(remote, it.filename), join(local, it.filename), it.attrs.mode, it.attrs.size)
+        )
       } else {
-        plan.push({ remote, local, isDir: false, size: st.size })
+        files.push({ from: remote, to: local, size })
       }
     }
     const firstLocal: string[] = []
     for (const p of remotePaths) {
       const name = await uniqueName(posix.basename(p), (n) => fsp.access(join(localDir, n)).then(() => true, () => false))
+      const st = await promisify<{ mode: number; size: number }>((cb) => browse.stat(p, cb))
       firstLocal.push(join(localDir, name))
-      await walk(p, join(localDir, name))
+      await walk(p, join(localDir, name), st.mode, st.size)
     }
 
     const label = remotePaths.length === 1 ? posix.basename(remotePaths[0]) : `${remotePaths.length} items`
     const target = remotePaths.length === 1 ? firstLocal[0] : localDir
-    const t = this.startTransfer(sessionId, 'down', label, target, plan.reduce((n, i) => n + i.size, 0), sftp)
+    await this.transfer(s, 'down', label, target, files, async () => {
+      for (const d of dirs) await fsp.mkdir(d, { recursive: true })
+    })
+  }
+
+  /**
+   * Runs a batch of file copies on a dedicated SFTP channel, several files at a
+   * time, so cancelling it never disturbs browsing and small files don't queue
+   * behind each other one round trip at a time.
+   */
+  private async transfer(
+    s: Session,
+    direction: 'up' | 'down',
+    label: string,
+    target: string,
+    files: FileJob[],
+    prepare: (sftp: SFTPWrapper) => Promise<void>
+  ): Promise<void> {
+    const t = this.startTransfer(s.id, direction, label, target, files.reduce((n, f) => n + f.size, 0))
+    let sftp: SFTPWrapper | undefined
     try {
-      for (const item of plan) {
-        if (t.cancelled) break
-        if (item.isDir) {
-          await fsp.mkdir(item.local, { recursive: true })
-          continue
-        }
-        const base = t.done
-        await promisify<void>((cb) =>
-          sftp.fastGet(item.remote, item.local, { step: (got) => this.progress(t, base + got) }, cb)
-        )
-        this.progress(t, base + item.size, true)
+      sftp = await openSftp(s.client)
+      t.sftp = sftp
+      await prepare(sftp)
+      let finished = 0
+      const inFlight = new Map<FileJob, number>()
+      const report = (force = false): void => {
+        let n = finished
+        for (const v of inFlight.values()) n += v
+        this.progress(t, n, force)
       }
+      await pool(files, PARALLEL, async (f) => {
+        if (t.cancelled) return
+        inFlight.set(f, 0)
+        const step = (n: number): void => {
+          inFlight.set(f, n)
+          report()
+        }
+        await promisify<void>((cb) =>
+          direction === 'up' ? sftp!.fastPut(f.from, f.to, { step }, cb) : sftp!.fastGet(f.from, f.to, { step }, cb)
+        )
+        inFlight.delete(f)
+        finished += f.size
+        report(true)
+      })
       this.finish(t)
     } catch (err) {
       this.finish(t, err as Error)
+    } finally {
+      sftp?.end()
     }
   }
 
@@ -516,7 +602,7 @@ export class SessionManager {
     const t = this.transfers.get(id)
     if (!t || t.status !== 'running') return
     t.cancelled = true
-    // Closing the SFTP channel aborts an in-flight fastPut/fastGet.
+    // Closing the transfer's own SFTP channel aborts in-flight fastPut/fastGet calls.
     t.sftp?.end()
   }
 
@@ -525,8 +611,7 @@ export class SessionManager {
     direction: 'up' | 'down',
     label: string,
     target: string,
-    total: number,
-    sftp: SFTPWrapper
+    total: number
   ): ActiveTransfer {
     const t: ActiveTransfer = {
       id: randomUUID(),
@@ -537,8 +622,7 @@ export class SessionManager {
       total,
       done: 0,
       status: 'running',
-      cancelled: false,
-      sftp
+      cancelled: false
     }
     this.transfers.set(t.id, t)
     this.emitTransfer(t)
@@ -571,6 +655,59 @@ export class SessionManager {
 
 function promisify<T>(fn: (cb: (err: Error | null | undefined, res: T) => void) => void): Promise<T> {
   return new Promise((resolve, reject) => fn((err, res) => (err ? reject(err) : resolve(res))))
+}
+
+function openSftp(client: Client): Promise<SFTPWrapper> {
+  return promisify<SFTPWrapper>((cb) => client.sftp(cb))
+}
+
+type DirItem = { filename: string; attrs: { mode: number; size: number; mtime: number } }
+
+/**
+ * Like `sftp.readdir(path)`, but keeps several READDIR requests in flight (each
+ * returns the next batch of entries) and doesn't wait for the handle to close.
+ * Order of batches doesn't matter because callers sort the result.
+ */
+function readdirFast(sftp: SFTPWrapper, path: string, depth = 4): Promise<DirItem[]> {
+  return new Promise((resolve, reject) => {
+    sftp.opendir(path, (err, handle) => {
+      if (err) return reject(err)
+      const all: DirItem[] = []
+      let inFlight = 0
+      let ended = false
+      let failure: Error | undefined
+      const settle = (): void => {
+        if (inFlight > 0) return
+        sftp.close(handle, () => {})
+        if (failure) reject(failure)
+        else resolve(all)
+      }
+      const request = (): void => {
+        inFlight++
+        sftp.readdir(handle, (err, list) => {
+          inFlight--
+          if (err || !list) {
+            ended = true
+            if (err && (err as { code?: number }).code !== 1) failure ??= err
+          } else {
+            all.push(...(list as DirItem[]))
+            if (!ended) request()
+          }
+          if (ended) settle()
+        })
+      }
+      for (let i = 0; i < depth; i++) request()
+    })
+  })
+}
+
+/** Runs `fn` over `items` with at most `limit` running at once. */
+async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let i = 0
+  const worker = async (): Promise<void> => {
+    while (i < items.length) await fn(items[i++])
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
 }
 
 function exists(sftp: SFTPWrapper, path: string): Promise<boolean> {

@@ -16,13 +16,17 @@ import {
 import type { RemoteEntry } from '@shared/types'
 import {
   api,
+  cachedListing,
   confirmDialog,
   droppedPaths,
   errorMessage,
+  fetchListing,
   formatBytes,
   formatDate,
   hasFiles,
+  invalidateListing,
   isMac,
+  type Listing,
   showDialog,
   textDialog,
   uploadWithConfirm
@@ -54,6 +58,8 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
   const crumbsEl = useRef<HTMLDivElement>(null)
   const pathRef = useRef(path)
   pathRef.current = path
+  const loadSeq = useRef(0)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const fail = (e: unknown): void => {
     void showDialog({
@@ -63,25 +69,47 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     })
   }
 
+  const show = useCallback((res: Listing) => {
+    const samePath = res.path === pathRef.current
+    setPath(res.path)
+    setEntries(res.entries)
+    setError('')
+    if (!samePath) {
+      setSelected(new Set())
+      setAnchor(null)
+    } else {
+      const still = new Set(res.entries.map((e) => e.path))
+      setSelected((sel) => new Set([...sel].filter((p) => still.has(p))))
+    }
+  }, [])
+
+  /** Shows a cached listing right away (unless `fresh`), then refreshes it from the server. */
   const load = useCallback(
-    async (dir: string) => {
+    async (dir: string, fresh = false) => {
       if (!sessionId) return
+      const seq = ++loadSeq.current
+      if (fresh) invalidateListing(sessionId, dir)
+      const cached = cachedListing(sessionId, dir)
+      if (cached) show(cached)
       setLoading(true)
-      setError('')
       try {
-        const res = await api.list(sessionId, dir)
-        setPath(res.path)
-        setEntries(res.entries)
-        setSelected(new Set())
-        setAnchor(null)
+        const res = await fetchListing(sessionId, dir)
+        if (seq === loadSeq.current) show(res)
       } catch (e) {
-        setError(errorMessage(e))
+        if (seq === loadSeq.current && !cached) setError(errorMessage(e))
       } finally {
-        setLoading(false)
+        if (seq === loadSeq.current) setLoading(false)
       }
     },
-    [sessionId]
+    [sessionId, show]
   )
+
+  /** Hovering a folder briefly loads it in the background, so opening it is instant. */
+  const prefetch = (item: RemoteEntry): void => {
+    clearTimeout(hoverTimer.current)
+    if (!sessionId || !item.isDir || cachedListing(sessionId, item.path)) return
+    hoverTimer.current = setTimeout(() => fetchListing(sessionId, item.path).catch(() => {}), 120)
+  }
 
   const goToTerminalDir = useCallback(async () => {
     if (!sessionId) return
@@ -97,9 +125,9 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
   useEffect(
     () =>
       api.onTransfer((t) => {
-        if (t.sessionId === sessionId && t.direction === 'up' && t.status !== 'running' && t.target === pathRef.current) {
-          void load(pathRef.current)
-        }
+        if (!sessionId || t.sessionId !== sessionId || t.direction !== 'up' || t.status === 'running') return
+        if (t.target === pathRef.current) void load(pathRef.current, true)
+        else invalidateListing(sessionId, t.target)
       }),
     [sessionId, load]
   )
@@ -131,7 +159,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     } catch (e) {
       fail(e)
     }
-    void load(path)
+    void load(path, true)
   }
 
   const rename = async (item: RemoteEntry): Promise<void> => {
@@ -143,7 +171,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     } catch (e) {
       fail(e)
     }
-    void load(path)
+    void load(path, true)
   }
 
   const newFolder = async (): Promise<void> => {
@@ -155,7 +183,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     } catch (e) {
       fail(e)
     }
-    void load(path)
+    void load(path, true)
   }
 
   const open = (item: RemoteEntry): void => {
@@ -302,7 +330,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
         <button className="icon-btn" onClick={() => void newFolder()} title="New folder">
           <FolderPlus size={15} />
         </button>
-        <button className="icon-btn" onClick={() => void load(path)} title="Refresh">
+        <button className="icon-btn" onClick={() => void load(path, true)} title="Refresh">
           <RefreshCw size={15} className={loading ? 'spin' : ''} />
         </button>
         <button className="icon-btn" onClick={onClose} title="Close">
@@ -340,6 +368,8 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
               setMenu({ x: e.clientX, y: e.clientY, entry: item })
             }}
             data-dir={item.isDir ? item.path : undefined}
+            onMouseEnter={() => prefetch(item)}
+            onMouseLeave={() => clearTimeout(hoverTimer.current)}
           >
             <span className="name">
               {item.isDir ? <Folder size={15} className="ico dir" /> : <File size={15} className="ico" />}
@@ -380,7 +410,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
               <button onClick={() => (setMenu(null), void newFolder())}>
                 <FolderPlus size={14} /> New folder
               </button>
-              <button onClick={() => (setMenu(null), void load(path))}>
+              <button onClick={() => (setMenu(null), void load(path, true))}>
                 <RefreshCw size={14} /> Refresh
               </button>
             </>

@@ -734,6 +734,9 @@ code {
 }
 .sftp-row {
   height: 28px;
+  /* Skip layout/paint for rows scrolled out of view in huge folders. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
   border-radius: 6px;
   padding: 0 8px;
   cursor: default;

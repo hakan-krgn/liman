@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { WebglAddon } from '@xterm/addon-webgl'
 import { Loader2, RotateCw, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
 import { api, droppedPaths, errorMessage, hasFiles, isMac, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
@@ -55,6 +56,14 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     t.loadAddon(new Unicode11Addon())
     t.unicode.activeVersion = '11'
     t.open(hostEl.current!)
+    // GPU rendering keeps typing and fast output smooth; the DOM renderer is the fallback.
+    try {
+      const webgl = new WebglAddon()
+      webgl.onContextLoss(() => webgl.dispose())
+      t.loadAddon(webgl)
+    } catch {
+      /* WebGL unavailable */
+    }
     term.current = t
     fit.current = f
     refit()

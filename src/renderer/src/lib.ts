@@ -1,4 +1,5 @@
 import type { ITheme } from '@xterm/xterm'
+import type { RemoteEntry } from '@shared/types'
 import type { DragEvent, ReactNode } from 'react'
 
 export const api = window.api
@@ -13,6 +14,44 @@ api.onData((sessionId, data) => dataHandlers.get(sessionId)?.(data))
 export function onSessionData(sessionId: string, cb: (d: Uint8Array) => void): () => void {
   dataHandlers.set(sessionId, cb)
   return () => dataHandlers.delete(sessionId)
+}
+
+// ----------------------------------------------------------- listing cache
+// Remote folder listings are kept per session so revisiting a folder is instant;
+// the panel still revalidates in the background.
+
+export type Listing = { path: string; entries: RemoteEntry[] }
+
+const listings = new Map<string, Listing>()
+const inflight = new Map<string, Promise<Listing>>()
+const MAX_LISTINGS = 300
+const listingKey = (sessionId: string, path: string): string => `${sessionId}\n${path}`
+
+export function cachedListing(sessionId: string, path: string): Listing | undefined {
+  return listings.get(listingKey(sessionId, path))
+}
+
+export function fetchListing(sessionId: string, dir: string): Promise<Listing> {
+  const key = listingKey(sessionId, dir)
+  const pending = inflight.get(key)
+  if (pending) return pending
+  const p = api
+    .list(sessionId, dir)
+    .then((res) => {
+      for (const k of new Set([key, listingKey(sessionId, res.path)])) {
+        listings.delete(k)
+        listings.set(k, res)
+      }
+      while (listings.size > MAX_LISTINGS) listings.delete(listings.keys().next().value!)
+      return res
+    })
+    .finally(() => inflight.delete(key))
+  inflight.set(key, p)
+  return p
+}
+
+export function invalidateListing(sessionId: string, path: string): void {
+  listings.delete(listingKey(sessionId, path))
 }
 
 // ------------------------------------------------------------------ dialogs
@@ -140,14 +179,14 @@ export function formatBytes(n: number): string {
   return `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`
 }
 
+// Building an Intl formatter is costly; reuse them for every row.
+const dateThisYear = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+const dateOtherYear = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+const currentYear = new Date().getFullYear()
+
 export function formatDate(sec: number): string {
   const d = new Date(sec * 1000)
-  const sameYear = d.getFullYear() === new Date().getFullYear()
-  return d.toLocaleString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    ...(sameYear ? { hour: '2-digit', minute: '2-digit' } : { year: 'numeric' })
-  })
+  return (d.getFullYear() === currentYear ? dateThisYear : dateOtherYear).format(d)
 }
 
 // ------------------------------------------------------------------ themes
