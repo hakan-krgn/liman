@@ -29,7 +29,19 @@ function resolvePrompts(filter: (sessionId: string) => boolean): void {
   }
 }
 
+/** Appends a timestamped line to logs/main.log (%APPDATA%\Liman\logs on Windows). */
+function writeLog(line: string): void {
+  try {
+    const dir = app.getPath('logs')
+    mkdirSync(dir, { recursive: true })
+    appendFileSync(join(dir, 'main.log'), `[${new Date().toISOString()}] ${line}\n`)
+  } catch {
+    /* nowhere left to report */
+  }
+}
+
 const sessions = new SessionManager({
+  log: writeLog,
   send(channel, ...args) {
     if (win && !win.isDestroyed()) win.webContents.send(channel, ...args)
   },
@@ -67,8 +79,8 @@ function createWindow(): void {
     backgroundColor: dark ? '#141517' : '#ffffff',
     titleBarStyle: 'hidden',
     ...(process.platform === 'darwin'
-      ? { trafficLightPosition: { x: 16, y: 14 } }
-      : { titleBarOverlay: { color: dark ? '#1a1b1e' : '#f6f6f7', symbolColor: dark ? '#e6e6e6' : '#1f1f1f', height: 44 } }),
+      ? { trafficLightPosition: { x: 16, y: 16 } }
+      : { titleBarOverlay: { color: dark ? '#1a1b1e' : '#f6f6f7', symbolColor: dark ? '#e6e6e6' : '#1f1f1f', height: 48 } }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -242,14 +254,7 @@ app.setName('Liman')
  */
 function logMainError(kind: string, err: unknown): void {
   console.error(`[main] ${kind}:`, err)
-  try {
-    const dir = app.getPath('logs')
-    mkdirSync(dir, { recursive: true })
-    const text = err instanceof Error ? (err.stack ?? err.message) : String(err)
-    appendFileSync(join(dir, 'main.log'), `[${new Date().toISOString()}] ${kind}: ${text}\n`)
-  } catch {
-    /* nowhere left to report */
-  }
+  writeLog(`${kind}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
 }
 process.on('uncaughtException', (err) => logMainError('uncaughtException', err))
 process.on('unhandledRejection', (reason) => logMainError('unhandledRejection', reason))

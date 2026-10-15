@@ -17,6 +17,8 @@ export interface Tab {
   sessionId?: string
   status: SessionStatus
   message?: string
+  /** The last connection dropped on its own (see useAutoReconnect). */
+  lost?: boolean
   attempt: number
   filesOpen: boolean
 }
@@ -30,6 +32,7 @@ export function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(null)
+  const [renameRequest, setRenameRequest] = useState<{ id: string; seq: number } | null>(null)
 
   useEffect(() => {
     void api.listHosts().then(setHosts)
@@ -81,7 +84,7 @@ export function App(): React.JSX.Element {
     () =>
       api.onStatus((e) =>
         setTabs((ts) =>
-          ts.map((t) => (t.sessionId === e.sessionId ? { ...t, status: e.status, message: e.message } : t))
+          ts.map((t) => (t.sessionId === e.sessionId ? { ...t, status: e.status, message: e.message, lost: e.lost } : t))
         )
       ),
     []
@@ -190,7 +193,7 @@ export function App(): React.JSX.Element {
   )
 
   const reconnect = useCallback(
-    (id: string) => setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, status: 'connecting', message: undefined, attempt: t.attempt + 1 } : t))),
+    (id: string) => setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, status: 'connecting', message: undefined, lost: false, attempt: t.attempt + 1 } : t))),
     []
   )
 
@@ -199,6 +202,17 @@ export function App(): React.JSX.Element {
     const onKey = (e: KeyboardEvent): void => {
       // Tab shortcuts are off while a modal is open.
       if (document.querySelector('.overlay')) return
+      // F2 renames the active tab (inside the files panel it renames the selected file).
+      if (e.key === 'F2' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        const target = e.target as HTMLElement
+        const typing = target.tagName === 'INPUT' && !target.classList.contains('xterm-helper-textarea')
+        if (activeId && !typing && !target.closest('.sftp')) {
+          e.preventDefault()
+          e.stopPropagation()
+          setRenameRequest({ id: activeId, seq: Date.now() })
+        }
+        return
+      }
       const mod = isMac ? e.metaKey : e.ctrlKey
       let handled = true
       if (e.ctrlKey && e.key === 'Tab') {
@@ -264,6 +278,7 @@ export function App(): React.JSX.Element {
             onRename={(id, title) => patchTab(id, { title })}
             onDuplicate={duplicateTab}
             onMove={moveTab}
+            renameRequest={renameRequest}
           />
           <div className="tabbar-actions">
             {active && (

@@ -12,6 +12,8 @@ interface Props {
   onDuplicate(id: string): void
   /** Moves tab `id` next to `targetId` (after it when `after`). */
   onMove(id: string, targetId: string, after: boolean): void
+  /** Bumped by the F2 shortcut to start renaming a tab. */
+  renameRequest: { id: string; seq: number } | null
 }
 
 type Menu = { x: number; y: number; id: string }
@@ -35,6 +37,10 @@ export function TabBar(p: Props): React.JSX.Element {
   const [dropAt, setDropAt] = useState<{ id: string; after: boolean } | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [menu, setMenu] = useState<Menu | null>(null)
+
+  useEffect(() => {
+    if (p.renameRequest) setEditing(p.renameRequest.id)
+  }, [p.renameRequest])
 
   // Keep the active tab in view when it changes or tabs are added.
   useEffect(() => {
@@ -176,6 +182,7 @@ export function TabBar(p: Props): React.JSX.Element {
         <div className="menu" ref={menuEl} style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
           <button onClick={menuAction(() => setEditing(menu.id))}>
             <Pencil size={14} /> Rename
+            <kbd className="menu-key">F2</kbd>
           </button>
           <button onClick={menuAction(() => p.onDuplicate(menu.id))}>
             <Copy size={14} /> Duplicate

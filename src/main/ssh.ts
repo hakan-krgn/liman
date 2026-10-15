@@ -23,6 +23,8 @@ export interface Bridge {
   ask(sessionId: string, req: PromptRequest): Promise<PromptResponse>
   /** Dismisses any prompt still open for a session that went away. */
   cancelPrompts(sessionId: string): void
+  /** Appends a line to the app log (connection drops and the like). */
+  log?(line: string): void
 }
 
 interface Session {
@@ -43,6 +45,11 @@ interface Session {
   closed: boolean
   /** The connection is going away (user disconnect or socket ended); open nothing new. */
   ending: boolean
+  /** The user closed the session (tab closed, app quit). */
+  userClosed?: boolean
+  /** The remote shell ended by itself (`exit`, logout). */
+  shellExited?: boolean
+  connectedAt?: number
   /** How this session logged in, so a second connection for transfers can do the same. */
   login?: LoginInfo
   /** Separate connection for file transfers (null: unavailable, use the main one). */
@@ -187,6 +194,7 @@ export class SessionManager {
     client.on('ready', () => {
       clearTimeout(timer)
       state.ready = true
+      session.connectedAt = Date.now()
       if (state.hostKey && state.lastMethod) {
         session.login = {
           host: host.host,
@@ -216,8 +224,21 @@ export class SessionManager {
       clearTimeout(session.transferIdle)
       void session.transferConn?.then((c) => c?.end())
       this.bridge.cancelPrompts(sessionId)
-      if (!state.ready) this.status({ sessionId, status: 'error', message: state.fatal ?? 'Connection closed' })
-      else this.status({ sessionId, status: 'closed', message: state.fatal && `Connection lost: ${state.fatal}` })
+      if (!state.ready) {
+        this.bridge.log?.(`${hostLabel}: could not connect: ${state.fatal ?? 'connection closed'}`)
+        return this.status({ sessionId, status: 'error', message: state.fatal ?? 'Connection closed' })
+      }
+      // Neither `exit` nor the user: the network, the server or something in between.
+      const lost = !session.shellExited && !session.userClosed
+      const minutes = ((Date.now() - (session.connectedAt ?? Date.now())) / 60_000).toFixed(1)
+      const why = lost ? `connection lost (${state.fatal ?? 'closed by the server'})` : session.userClosed ? 'closed by the user' : 'shell exited'
+      this.bridge.log?.(`${hostLabel}: session ended after ${minutes} min: ${why}`)
+      this.status({
+        sessionId,
+        status: 'closed',
+        lost,
+        message: lost ? `Connection lost${state.fatal ? `: ${state.fatal}` : ''}` : undefined
+      })
     })
 
     arm()
@@ -422,6 +443,8 @@ export class SessionManager {
       }
       stream.on('data', onData)
       stream.stderr.on('data', onData)
+      // Only the server reports an exit status; a dropped connection just closes the channel.
+      stream.on('exit', () => (session.shellExited = true))
       stream.on('close', () => {
         if (held && !session.ending) {
           clearTimeout(holdTimer)
@@ -498,6 +521,7 @@ export class SessionManager {
     const s = this.sessions.get(sessionId)
     if (!s) return
     s.ending = true
+    s.userClosed = true
     s.client.end()
   }
 

@@ -37,6 +37,8 @@ export interface SessionStatusEvent {
   sessionId: string
   status: SessionStatus
   message?: string
+  /** The connection dropped on its own (not `exit`, not closed by the user): worth reconnecting. */
+  lost?: boolean
 }
 
 export interface RemoteEntry {

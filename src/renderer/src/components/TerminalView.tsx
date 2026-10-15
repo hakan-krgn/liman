@@ -8,6 +8,7 @@ import { Loader2, RotateCw, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
 import { api, droppedPaths, errorMessage, hasFiles, isMac, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
 import { SftpPanel } from './SftpPanel'
+import { useAutoReconnect } from '../useAutoReconnect'
 
 interface Props {
   tab: Tab
@@ -34,6 +35,17 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
 
   const [drop, setDrop] = useState<{ dir?: string } | null>(null)
   const dragDepth = useRef(0)
+
+  const { retry, stop: stopRetry, now: retryNow } = useAutoReconnect(tab, onReconnect, () =>
+    term.current?.write('\x1b[2m[Liman] Reconnected. The previous shell ended with the old connection.\x1b[0m\r\n')
+  )
+  // Re-render once a second for the countdown.
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!retry?.at) return
+    const t = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(t)
+  }, [retry?.at])
 
   const refit = (): void => {
     if (hostEl.current && hostEl.current.clientWidth > 0) fit.current?.fit()
@@ -211,13 +223,39 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
       <div className="term-area" onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
         <div className="term-host" ref={hostEl} />
 
-        {tab.status === 'connecting' && (
+        {tab.status === 'connecting' && !retry && (
           <div className="pill">
             <Loader2 size={14} className="spin" /> Connecting…
           </div>
         )}
 
-        {(tab.status === 'closed' || tab.status === 'error') && (
+        {retry && (
+          <div className="disconnected">
+            <div className="card">
+              <WifiOff size={22} />
+              <h3>Connection lost</h3>
+              {/* Only the cause; the heading already says the connection was lost. */}
+              {tab.message?.replace(/^Connection lost:?\s*/, '') && <p>{tab.message.replace(/^Connection lost:?\s*/, '')}</p>}
+              <p className="retrying">
+                <Loader2 size={13} className="spin" />
+                {retry.at
+                  ? `Reconnecting in ${Math.max(1, Math.ceil((retry.at - Date.now()) / 1000))}s`
+                  : 'Reconnecting…'}
+                <span className="hint"> · attempt {retry.attempt}</span>
+              </p>
+              <div className="row">
+                <button className="btn ghost" onClick={stopRetry}>
+                  Stop
+                </button>
+                <button className="btn primary" onClick={retryNow} disabled={!retry.at}>
+                  <RotateCw size={14} /> Reconnect now
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!retry && (tab.status === 'closed' || tab.status === 'error') && (
           <div className="disconnected">
             <div className="card">
               <WifiOff size={22} />

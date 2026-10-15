@@ -75,12 +75,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 describe.skipIf(!target)('SSH engine against a real server', () => {
   const statuses = new Map<string, string[]>()
+  const lost = new Map<string, boolean | undefined>()
   const prompts: PromptRequest[] = []
   let answer: (req: PromptRequest) => PromptResponse = () => null
   const manager = new SessionManager({
     send(channel, ...args) {
       if (channel !== 'ssh:status') return
-      const e = args[0] as { sessionId: string; status: string; message?: string }
+      const e = args[0] as { sessionId: string; status: string; message?: string; lost?: boolean }
+      if (e.status === 'closed') lost.set(e.sessionId, e.lost)
       statuses.set(e.sessionId, [...(statuses.get(e.sessionId) ?? []), e.message ? `${e.status}:${e.message}` : e.status])
     },
     async ask(_sessionId, req) {
@@ -264,6 +266,33 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     } finally {
       process.off('uncaughtException', record)
     }
+  })
+
+  it('tells a dropped connection apart from `exit` and from closing the tab', async () => {
+    addHost('exit')
+    manager.connect('exit', 'exit', 80, 24)
+    await waitFor('exit', (x) => x === 'connected')
+    await sleep(800)
+    manager.write('exit', 'exit\n')
+    expect(await waitFor('exit', (x) => x === 'closed')).toContain('closed')
+    expect(lost.get('exit')).toBe(false)
+
+    addHost('user')
+    manager.connect('user', 'user', 80, 24)
+    await waitFor('user', (x) => x === 'connected')
+    manager.disconnect('user')
+    await waitFor('user', (x) => x === 'closed')
+    expect(lost.get('user')).toBe(false)
+
+    addHost('drop2')
+    manager.connect('drop2', 'drop2', 80, 24)
+    await waitFor('drop2', (x) => x === 'connected')
+    await sleep(800)
+    // The server side of this one session goes away (like a reboot or a firewall reset).
+    manager.write('drop2', 'kill -9 $PPID\n')
+    const s = await waitFor('drop2', (x) => x.startsWith('closed'))
+    expect(lost.get('drop2')).toBe(true)
+    expect(s.at(-1)).toMatch(/^closed:Connection lost/)
   })
 
   it('stops at the first cancelled password prompt', async () => {

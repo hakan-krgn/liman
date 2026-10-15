@@ -16,8 +16,8 @@
   --warn: #d9a21b;
   --shadow: 0 12px 40px rgba(20, 20, 30, 0.14), 0 2px 6px rgba(20, 20, 30, 0.06);
   --radius: 10px;
-  --titlebar: 44px;
-  --sidebar: 248px;
+  --titlebar: 48px;
+  --sidebar: 272px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Inter, system-ui, sans-serif;
   --mono: 'JetBrains Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
   color-scheme: light;
@@ -55,7 +55,7 @@ body,
 
 body {
   font-family: var(--font);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -97,7 +97,7 @@ input::placeholder {
 
 code {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .spin {
@@ -116,8 +116,8 @@ code {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 14px;
+  height: 36px;
+  padding: 0 16px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -173,11 +173,11 @@ code {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 7px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -241,9 +241,9 @@ code {
   transform: translateY(-50%);
 }
 .search input {
-  padding-left: 30px;
+  padding-left: 32px;
   background: var(--bg);
-  height: 32px;
+  height: 36px;
 }
 
 .host-list {
@@ -259,7 +259,7 @@ code {
   margin-top: 8px;
   padding: 5px 8px 5px 4px;
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -342,7 +342,7 @@ code {
   border: 1.5px dashed var(--border);
   border-radius: 8px;
   text-align: center;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--faint);
 }
 .ungroup-zone.active {
@@ -355,8 +355,8 @@ code {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 8px;
-  border-radius: 8px;
+  padding: 9px 10px;
+  border-radius: 9px;
   cursor: pointer;
   outline: none;
 }
@@ -366,8 +366,8 @@ code {
 }
 .host-icon {
   position: relative;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 7px;
   display: grid;
   place-items: center;
@@ -402,7 +402,7 @@ code {
 }
 .host-sub {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .host-edit {
   opacity: 0;
@@ -465,7 +465,7 @@ code {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.35;
 }
 .update-text strong {
@@ -531,11 +531,11 @@ code {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 30px;
-  min-width: 0;
-  max-width: 200px;
-  padding: 0 6px 0 12px;
+  gap: 9px;
+  height: 34px;
+  min-width: 150px;
+  max-width: 260px;
+  padding: 0 8px 0 14px;
   border-radius: 8px;
   color: var(--muted);
   cursor: default;
@@ -565,7 +565,7 @@ code {
   height: 22px;
   padding: 0 6px;
   border-radius: 5px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .tab:hover {
   background: var(--hover);
@@ -577,6 +577,7 @@ code {
   box-shadow: 0 0 0 1px var(--border);
 }
 .tab-title {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -651,7 +652,7 @@ code {
   position: relative;
   flex: 1;
   min-width: 0;
-  padding: 10px 0 4px 14px;
+  padding: 14px 0 6px 18px;
   background: var(--bg);
 }
 .term-host {
@@ -718,6 +719,12 @@ code {
   margin: 0;
   user-select: text;
 }
+.card .retrying {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
 .card .row {
   display: flex;
   gap: 8px;
@@ -725,7 +732,7 @@ code {
 }
 .hint {
   color: var(--faint);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .drop-overlay {
@@ -840,7 +847,7 @@ code {
   white-space: nowrap;
   padding: 0 4px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
 }
 .crumb {
   cursor: pointer;
@@ -860,22 +867,22 @@ code {
 }
 .path-input {
   flex: 1;
-  height: 28px;
+  height: 32px;
   padding: 4px 8px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
 }
 .sftp-head,
 .sftp-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 70px 104px;
+  grid-template-columns: minmax(0, 1fr) 76px 128px;
   gap: 8px;
   align-items: center;
   padding: 0 12px;
 }
 .sftp-head {
-  height: 26px;
-  font-size: 11px;
+  height: 30px;
+  font-size: 13px;
   color: var(--faint);
   border-bottom: 1px solid var(--border);
 }
@@ -890,10 +897,10 @@ code {
   padding: 4px 4px;
 }
 .sftp-row {
-  height: 28px;
+  height: 34px;
   /* Skip layout/paint for rows scrolled out of view in huge folders. */
   content-visibility: auto;
-  contain-intrinsic-size: auto 28px;
+  contain-intrinsic-size: auto 34px;
   border-radius: 6px;
   padding: 0 8px;
   cursor: default;
@@ -932,7 +939,7 @@ code {
 .sftp-row .size,
 .sftp-row .date {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -950,12 +957,14 @@ code {
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--faint);
   border-top: 1px solid var(--border);
 }
 
 .menu {
+  /* Menus can open inside the title bar, which is a window-drag region on Windows. */
+  -webkit-app-region: no-drag;
   position: fixed;
   z-index: 50;
   min-width: 170px;
@@ -970,7 +979,7 @@ code {
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -983,6 +992,13 @@ code {
 .menu button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+.menu-key {
+  margin-left: auto;
+  padding-left: 16px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--faint);
 }
 .menu hr {
   border: 0;
@@ -1000,7 +1016,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 320px;
+  width: 360px;
 }
 .transfer {
   display: flex;
@@ -1020,8 +1036,8 @@ code {
   }
 }
 .transfer-icon {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
   display: grid;
   place-items: center;
@@ -1058,7 +1074,7 @@ code {
   font-weight: 500;
 }
 .transfer-sub {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--muted);
   margin-top: 2px;
   overflow: hidden;
@@ -1103,13 +1119,14 @@ code {
   z-index: 70;
 }
 .modal {
+  font-size: 14px;
   width: min(460px, calc(100vw - 32px));
   max-height: calc(100vh - 64px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 20px;
+  padding: 24px;
   border-radius: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1138,7 +1155,7 @@ code {
   gap: 6px;
 }
 .modal label > span {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 550;
   color: var(--muted);
 }
@@ -1163,7 +1180,7 @@ code {
 }
 .segmented button {
   flex: 1;
-  height: 28px;
+  height: 32px;
   border: 0;
   border-radius: 7px;
   background: transparent;
