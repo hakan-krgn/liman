@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -234,6 +235,24 @@ function setupPermissions(): void {
 }
 
 app.setName('Liman')
+
+/**
+ * Last resort: a stray error in the main process must not pop Electron's crash
+ * dialog over a working app (other sessions are fine). Keep it in logs/main.log.
+ */
+function logMainError(kind: string, err: unknown): void {
+  console.error(`[main] ${kind}:`, err)
+  try {
+    const dir = app.getPath('logs')
+    mkdirSync(dir, { recursive: true })
+    const text = err instanceof Error ? (err.stack ?? err.message) : String(err)
+    appendFileSync(join(dir, 'main.log'), `[${new Date().toISOString()}] ${kind}: ${text}\n`)
+  } catch {
+    /* nowhere left to report */
+  }
+}
+process.on('uncaughtException', (err) => logMainError('uncaughtException', err))
+process.on('unhandledRejection', (reason) => logMainError('unhandledRejection', reason))
 // Lets development and tests run against a throwaway profile.
 if (DEV_USER_DATA) app.setPath('userData', DEV_USER_DATA)
 

@@ -234,6 +234,29 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     manager.disconnect('resize')
   })
 
+  it('survives the connection dropping while the shell is being opened', async () => {
+    // Regression: ssh2 hands the pending shell request an error when the socket
+    // dies, and opening the fallback shell then threw "Not connected" in main.
+    addHost('drop')
+    const uncaught: unknown[] = []
+    const record = (e: unknown): void => void uncaught.push(e)
+    process.on('uncaughtException', record)
+    try {
+      manager.connect('drop', 'drop', 80, 24)
+      const internals = manager as unknown as { sessions: Map<string, { client: Client }> }
+      const client = internals.sessions.get('drop')!.client as Client & { _sock: { destroy(): void } }
+      // Our own 'ready' handler runs first and asks for the shell; then the socket dies.
+      client.once('ready', () => client._sock.destroy())
+      const s = await waitFor('drop', (x) => x.startsWith('closed') || x.startsWith('error'))
+      await sleep(300)
+      expect(uncaught).toEqual([])
+      expect(s).not.toContain('connected')
+      expect(s.at(-1)).toMatch(/^(closed|error)/)
+    } finally {
+      process.off('uncaughtException', record)
+    }
+  })
+
   it('stops at the first cancelled password prompt', async () => {
     addHost('nopw', { password: undefined, hasPassword: false })
     answer = () => null

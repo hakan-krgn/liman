@@ -41,6 +41,8 @@ interface Session {
   osc7Cwd?: string
   scan: string
   closed: boolean
+  /** The connection is going away (user disconnect or socket ended); open nothing new. */
+  ending: boolean
 }
 
 interface ActiveTransfer extends Transfer {
@@ -122,6 +124,7 @@ export class SessionManager {
       rows,
       scan: '',
       closed: false,
+      ending: false,
       helperQueue: Promise.resolve()
     }
     this.sessions.set(sessionId, session)
@@ -165,8 +168,10 @@ export class SessionManager {
       if (err.level === 'agent' || err.message.startsWith('Error while signing')) return
       fail(err.level === 'client-authentication' ? 'Authentication failed' : err.message.replace(/^connect /, ''))
     })
+    client.on('end', () => (session.ending = true))
     client.on('close', () => {
       clearTimeout(timer)
+      session.ending = true
       session.closed = true
       this.sessions.delete(sessionId)
       this.bridge.cancelPrompts(sessionId)
@@ -369,7 +374,7 @@ export class SessionManager {
       stream.on('data', onData)
       stream.stderr.on('data', onData)
       stream.on('close', () => {
-        if (held && !session.closed) {
+        if (held && !session.ending) {
           clearTimeout(holdTimer)
           held = null
           return openPlain()
@@ -381,18 +386,32 @@ export class SessionManager {
       this.helper(session).catch(() => {})
     }
 
-    const openPlain = (): void => {
-      session.client.shell(pty(), (err, stream) => {
-        if (err) {
-          fail(err.message)
+    // ssh2 throws synchronously once the socket is gone (e.g. the tab was closed
+    // while connecting); that must never escape into the main process.
+    const openChannel = (kind: 'exec' | 'shell', cb: (err: Error | undefined, stream?: ClientChannel) => void): void => {
+      if (session.ending) return
+      try {
+        if (kind === 'exec') session.client.exec(SHELL_BOOTSTRAP, { pty: pty() }, cb)
+        else session.client.shell(pty(), cb)
+      } catch {
+        // "Not connected": the socket is gone; the client's close event reports it.
+        session.ending = true
+      }
+    }
+
+    const openPlain = (): void =>
+      openChannel('shell', (err, stream) => {
+        if (session.ending) return
+        if (err || !stream) {
+          fail(err?.message ?? 'Could not open a shell')
           session.client.end()
         } else attach(stream, false)
       })
-    }
 
-    session.client.exec(SHELL_BOOTSTRAP, { pty: pty() }, (err, stream) => {
+    openChannel('exec', (err, stream) => {
+      if (session.ending) return
       // Restricted servers may refuse exec outright; fall back to a plain shell.
-      if (err) openPlain()
+      if (err || !stream) openPlain()
       else attach(stream, true)
     })
   }
@@ -427,11 +446,14 @@ export class SessionManager {
   }
 
   disconnect(sessionId: string): void {
-    this.sessions.get(sessionId)?.client.end()
+    const s = this.sessions.get(sessionId)
+    if (!s) return
+    s.ending = true
+    s.client.end()
   }
 
   disconnectAll(): void {
-    for (const s of this.sessions.values()) s.client.end()
+    for (const id of [...this.sessions.keys()]) this.disconnect(id)
   }
 
   private status(e: SessionStatusEvent): void {
