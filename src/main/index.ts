@@ -141,6 +141,8 @@ function registerIpc(): void {
   handle('hosts:list', () => store.listHosts())
   handle('hosts:save', (input) => store.saveHost(input as HostInput))
   handle('hosts:delete', (id) => store.deleteHost(str(id)))
+  handle('hosts:move', (id, group, beforeId) => store.moveHost(str(id), str(group), beforeId === null ? null : str(beforeId)))
+  handle('hosts:moveGroup', (group, before) => store.moveGroup(str(group), before === null ? null : str(before)))
 
   handle('settings:get', () => store.getSettings())
   handle('settings:set', (patch) => store.setSettings(patch as Partial<Settings>))

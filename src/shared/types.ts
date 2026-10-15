@@ -27,6 +27,8 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 export interface Settings {
   theme: ThemeMode
   fontSize: number
+  /** Sidebar groups the user folded away. */
+  collapsedGroups: string[]
 }
 
 export type SessionStatus = 'connecting' | 'connected' | 'closed' | 'error'

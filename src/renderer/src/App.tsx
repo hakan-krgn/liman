@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import type { Host, HostInput, SessionStatus, Settings } from '@shared/types'
 import { api, chrome, dismissDialog, isMac, showDialog } from './lib'
-import { Sidebar } from './components/Sidebar'
+import { FONT_MAX, FONT_MIN, Sidebar } from './components/Sidebar'
 import { HostForm } from './components/HostForm'
 import { TerminalView } from './components/TerminalView'
 import { DialogHost } from './components/DialogHost'
@@ -47,10 +47,33 @@ export function App(): React.JSX.Element {
     void api.setTitleBar(chrome[theme].bg, chrome[theme].fg)
   }, [theme])
 
+  // Changes apply at once; writing them to disk is batched (Ctrl+scroll fires a lot).
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+  const unsaved = useRef<Partial<Settings>>({})
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const updateSettings = useCallback((patch: Partial<Settings>) => {
+    // Keep the ref current right away: wheel events can arrive faster than renders.
+    if (settingsRef.current) settingsRef.current = { ...settingsRef.current, ...patch }
     setSettings((s) => (s ? { ...s, ...patch } : s))
-    void api.setSettings(patch)
+    Object.assign(unsaved.current, patch)
+    clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      const changes = unsaved.current
+      unsaved.current = {}
+      void api.setSettings(changes)
+    }, 300)
   }, [])
+
+  /** Terminal font zoom: +1 / -1 steps, or 0 to reset. */
+  const zoom = useCallback(
+    (step: number) => {
+      const current = settingsRef.current?.fontSize ?? 14
+      const fontSize = step === 0 ? 14 : Math.min(FONT_MAX, Math.max(FONT_MIN, current + step))
+      if (fontSize !== current) updateSettings({ fontSize })
+    },
+    [updateSettings]
+  )
 
   // --------------------------------------------------------------- sessions
   useEffect(
@@ -158,6 +181,12 @@ export function App(): React.JSX.Element {
       } else if (mod && /^[1-9]$/.test(e.key) && !e.shiftKey) {
         const t = tabs[Number(e.key) - 1]
         if (t) setActiveId(t.id)
+      } else if (mod && !e.altKey && (e.key === '=' || e.key === '+')) {
+        zoom(1)
+      } else if (mod && !e.altKey && e.key === '-') {
+        zoom(-1)
+      } else if (mod && !e.altKey && e.key === '0') {
+        zoom(0)
       } else {
         handled = false
       }
@@ -168,7 +197,7 @@ export function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [tabs, activeId, closeTab])
+  }, [tabs, activeId, closeTab, zoom])
 
   const active = tabs.find((t) => t.id === activeId)
   const connectedHosts = useMemo(
@@ -185,7 +214,9 @@ export function App(): React.JSX.Element {
         connected={connectedHosts}
         themeMode={settings.theme}
         fontSize={settings.fontSize}
+        collapsedGroups={settings.collapsedGroups}
         onSettings={updateSettings}
+        onHostsChange={setHosts}
         onConnect={openHost}
         onEdit={(host) => setForm({ host })}
         onNew={(prefill) => setForm({ prefill })}
@@ -237,6 +268,7 @@ export function App(): React.JSX.Element {
               active={t.id === activeId}
               theme={theme}
               fontSize={settings.fontSize}
+              onZoom={zoom}
               onSession={(sessionId) => patchTab(t.id, { sessionId })}
               onReconnect={() => reconnect(t.id)}
               onClose={() => closeTab(t.id)}

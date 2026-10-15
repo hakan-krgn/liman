@@ -23,6 +23,11 @@ const api = {
   listHosts: (): Promise<Host[]> => ipcRenderer.invoke('hosts:list'),
   saveHost: (input: HostInput): Promise<Host> => ipcRenderer.invoke('hosts:save', input),
   deleteHost: (id: string): Promise<void> => ipcRenderer.invoke('hosts:delete', id),
+  /** Puts a host into `group` before `beforeId` (null = end of the group); returns the new list. */
+  moveHost: (id: string, group: string, beforeId: string | null): Promise<Host[]> =>
+    ipcRenderer.invoke('hosts:move', id, group, beforeId),
+  moveGroup: (group: string, beforeGroup: string | null): Promise<Host[]> =>
+    ipcRenderer.invoke('hosts:moveGroup', group, beforeGroup),
 
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   setSettings: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke('settings:set', patch),

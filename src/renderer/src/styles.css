@@ -252,12 +252,103 @@ code {
   padding: 2px 8px 8px;
 }
 .group-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 5px 8px 5px 4px;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--faint);
-  padding: 12px 8px 4px;
+  cursor: pointer;
+  outline: none;
+}
+.group-label:hover,
+.group-label:focus-visible {
+  color: var(--muted);
+  background: var(--hover);
+}
+.group-label .chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.group-label .chevron.open {
+  transform: rotate(90deg);
+}
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--active);
+  color: var(--muted);
+}
+.group-label.drop-into {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+/* Drop position while reordering hosts and groups. */
+.host-row.drop-before::before,
+.host-row.drop-after::after,
+.group-label.drop-before::before,
+.group-label.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.host-row.drop-before::before,
+.group-label.drop-before::before {
+  top: -1px;
+}
+.host-row.drop-after::after,
+.group-label.drop-after::after {
+  bottom: -1px;
+}
+.host-row.dragging {
+  opacity: 0.4;
+}
+.host-row .grip {
+  position: absolute;
+  left: -4px;
+  color: var(--faint);
+  opacity: 0;
+  cursor: grab;
+  transition: opacity 0.12s;
+}
+.host-row:hover .grip {
+  opacity: 1;
+}
+.ungroup-zone {
+  margin: 4px 0 6px;
+  padding: 10px;
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--faint);
+}
+.ungroup-zone.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 .host-row {
   position: relative;
@@ -315,6 +406,7 @@ code {
 }
 .host-edit {
   opacity: 0;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -426,6 +518,7 @@ code {
   white-space: nowrap;
 }
 .tab-close {
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--muted);

@@ -14,11 +14,13 @@ interface StoreData {
   settings: Settings
   /** "host:port" -> "ssh-ed25519 SHA256:..." */
   knownHosts: Record<string, string>
+  /** Set once `hosts` holds the user's own order (older files were shown sorted by name). */
+  ordered?: boolean
 }
 
 const defaults: StoreData = {
   hosts: [],
-  settings: { theme: 'system', fontSize: 14 },
+  settings: { theme: 'system', fontSize: 14, collapsedGroups: [] },
   knownHosts: {}
 }
 
@@ -33,6 +35,12 @@ function load(): StoreData {
   try {
     const raw = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
     data = { ...defaults, ...raw, settings: { ...defaults.settings, ...raw.settings } }
+    if (!data.ordered) {
+      // The sidebar used to sort by group and name; keep that look as the starting order.
+      data.hosts.sort((a, b) => groupKey(a).localeCompare(groupKey(b)) || a.name.localeCompare(b.name))
+      data.ordered = true
+      if (data.hosts.length) save()
+    }
   } catch (err) {
     // Never silently overwrite a file we couldn't read: keep it next to the fresh one.
     const backup = `${file}.corrupt-${Date.now()}`
@@ -45,6 +53,24 @@ function load(): StoreData {
     data = structuredClone(defaults)
   }
   return data
+}
+
+/** Ungrouped hosts sort first. */
+const groupKey = (h: { group?: string }): string => (h.group ? `1${h.group}` : '0')
+const groupOf = (h: { group?: string }): string => h.group?.trim() || ''
+
+/**
+ * The order the sidebar shows: ungrouped hosts first, then each group (in order of
+ * its first host) as one contiguous block. Moves work on this so they match the screen.
+ */
+function displayOrder<T extends { group?: string }>(hosts: T[]): T[] {
+  const groups = new Map<string, T[]>([['', []]])
+  for (const h of hosts) {
+    const g = groupOf(h)
+    if (!groups.has(g)) groups.set(g, [])
+    groups.get(g)!.push(h)
+  }
+  return [...groups.values()].flat()
 }
 
 function save(): void {
@@ -117,6 +143,42 @@ export const store = {
     return toPublic(next)
   },
 
+  /**
+   * Moves a host into `group` (empty = ungrouped), placed before `beforeId`,
+   * or at the end of that group when `beforeId` is null.
+   */
+  moveHost(id: string, group: string, beforeId: string | null): Host[] {
+    const d = load()
+    d.hosts = displayOrder(d.hosts)
+    const from = d.hosts.findIndex((h) => h.id === id)
+    if (from < 0) throw new Error('Host not found')
+    const [host] = d.hosts.splice(from, 1)
+    host.group = group.trim() || undefined
+    let at = beforeId ? d.hosts.findIndex((h) => h.id === beforeId) : -1
+    if (at < 0) {
+      const last = d.hosts.findLastIndex((h) => groupOf(h) === groupOf(host))
+      at = last >= 0 ? last + 1 : d.hosts.length
+    }
+    d.hosts.splice(at, 0, host)
+    d.hosts = displayOrder(d.hosts)
+    save()
+    return this.listHosts()
+  },
+
+  /** Moves a whole group before `beforeGroup` (or to the end when null). */
+  moveGroup(group: string, beforeGroup: string | null): Host[] {
+    const d = load()
+    const ordered = displayOrder(d.hosts)
+    const block = ordered.filter((h) => groupOf(h) === group)
+    const rest = ordered.filter((h) => groupOf(h) !== group)
+    let at = beforeGroup === null ? -1 : rest.findIndex((h) => groupOf(h) === beforeGroup)
+    if (at < 0) at = rest.length
+    rest.splice(at, 0, ...block)
+    d.hosts = displayOrder(rest)
+    save()
+    return this.listHosts()
+  },
+
   deleteHost(id: string): void {
     const d = load()
     d.hosts = d.hosts.filter((h) => h.id !== id)
@@ -136,7 +198,12 @@ export const store = {
 
   setSettings(patch: Partial<Settings>): Settings {
     const d = load()
-    d.settings = { ...d.settings, ...patch }
+    const next = { ...d.settings, ...patch }
+    // Only well-formed values reach the file.
+    if (!['system', 'light', 'dark'].includes(next.theme)) next.theme = d.settings.theme
+    next.fontSize = Math.min(32, Math.max(8, Math.round(Number(next.fontSize)) || 14))
+    next.collapsedGroups = Array.isArray(next.collapsedGroups) ? next.collapsedGroups.filter((g) => typeof g === 'string') : []
+    d.settings = next
     save()
     return d.settings
   },

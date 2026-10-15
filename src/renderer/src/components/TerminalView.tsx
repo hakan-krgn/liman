@@ -18,17 +18,19 @@ interface Props {
   onReconnect(): void
   onClose(): void
   onToggleFiles(): void
+  /** Font zoom request: +1 / -1. */
+  onZoom(step: number): void
 }
 
 export const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace'
 
-export function TerminalView({ tab, active, theme, fontSize, onSession, onReconnect, onClose, onToggleFiles }: Props): React.JSX.Element {
+export function TerminalView({ tab, active, theme, fontSize, onSession, onReconnect, onClose, onToggleFiles, onZoom }: Props): React.JSX.Element {
   const hostEl = useRef<HTMLDivElement>(null)
   const term = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
   const sessionId = useRef<string>('')
-  const live = useRef({ status: tab.status, onReconnect })
-  live.current = { status: tab.status, onReconnect }
+  const live = useRef({ status: tab.status, onReconnect, onZoom })
+  live.current = { status: tab.status, onReconnect, onZoom }
 
   const [drop, setDrop] = useState<{ dir?: string } | null>(null)
   const dragDepth = useRef(0)
@@ -98,6 +100,20 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
         return false
       }
       return true
+    })
+
+    // Ctrl/Cmd + wheel (and trackpad pinch, which arrives as ctrl+wheel) zooms the font.
+    // Small trackpad deltas are summed so a gesture doesn't jump several sizes at once.
+    let wheelSum = 0
+    t.attachCustomWheelEventHandler((e) => {
+      if (!e.ctrlKey && !e.metaKey) return true
+      e.preventDefault()
+      wheelSum += e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 33 : e.deltaY
+      if (Math.abs(wheelSum) >= 50) {
+        live.current.onZoom(wheelSum < 0 ? 1 : -1)
+        wheelSum = 0
+      }
+      return false
     })
 
     // Right click: copy the selection, or paste when nothing is selected.
