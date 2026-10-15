@@ -7,6 +7,11 @@
 <p align="center">
   A minimal SSH + SFTP client for Windows and macOS. Inspired by Termius, focused on being simple to use.<br>
   <a href="https://github.com/hakan-krgn/liman/actions/workflows/build-and-test.yml"><img src="https://github.com/hakan-krgn/liman/actions/workflows/build-and-test.yml/badge.svg?branch=master" alt="Build and Test"></a>
+  <a href="https://github.com/hakan-krgn/liman/releases/latest"><img src="https://img.shields.io/github/v/release/hakan-krgn/liman?label=download" alt="Latest release"></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/liman-dark.png" alt="Liman with an SSH session and the SFTP panel open, dark theme" width="880">
 </p>
 
 ## Install
@@ -16,12 +21,28 @@ Download the latest installer from [Releases](https://github.com/hakan-krgn/lima
 - **Windows:** run `Liman-Setup-<version>.exe`, choose a folder, and Liman is added to the Start menu and desktop. Uninstall it from *Settings → Apps*. The installer isn't code-signed yet, so SmartScreen may ask you to confirm (*More info → Run anyway*).
 - **macOS:** open `Liman-<version>-mac-universal.dmg` and drag Liman into *Applications*. The app is ad-hoc signed but not notarized, so the first time right-click it and choose *Open* (or run `xattr -cr /Applications/Liman.app`).
 
+## Drop files onto the terminal
+
+Drag anything from your desktop onto a terminal: Liman finds the folder that shell is in right now and uploads there. The SFTP panel follows along, so the new files show up as soon as they land.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/drag-and-drop.png" alt="Dragging files over the terminal shows the folder they will be uploaded to"></td>
+    <td width="50%"><img src="docs/screenshots/uploaded.png" alt="The upload finished and the files appear in the SFTP panel"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>The target folder is shown before you let go</sub></td>
+    <td align="center"><sub>Parallel transfers with progress, then the panel refreshes</sub></td>
+  </tr>
+</table>
+
 ## Features
 
 - **Drag-and-drop uploads:** Drop files or folders from the desktop, Explorer or Finder onto a terminal and they are uploaded to whatever directory that terminal is currently in. The target directory is shown before you drop.
 - **SFTP panel:** Browse folders, drop onto a folder to upload into it, double-click to download (to your Downloads folder), rename, delete, create folders, and jump to the terminal's current directory.
 - **Conflict handling:** If a file with the same name already exists you can choose *Keep both* (`file (1).txt`), *Replace* or *Cancel*.
-- **Light / dark / system theme** and adjustable terminal font size.
+- **Light / dark / system theme**; terminal font zoom with Ctrl/Cmd + scroll or Ctrl/Cmd + = / - / 0.
+- **Organised host list:** drag hosts and groups into any order, move hosts between groups, collapse groups you don't need.
 - **Authentication:** password, SSH key (including passphrase-protected keys), SSH agent, and keyboard-interactive (2FA).
 - **Security:** Host key fingerprints are confirmed on first connect and you are warned if they change. Passwords are encrypted with the operating system's keychain (`safeStorage`).
 - Tabs, quick connect (type `user@host:port` in the search box and press Enter), right-click to copy / paste.
