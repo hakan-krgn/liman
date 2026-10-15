@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Copy, Pencil, X, XSquare } from 'lucide-react'
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
+import { restrictToHorizontalAxis } from '@dnd-kit/modifiers'
+import { CSS } from '@dnd-kit/utilities'
 import type { Tab } from '../App'
 
 interface Props {
@@ -10,18 +14,13 @@ interface Props {
   onCloseOthers(id: string): void
   onRename(id: string, title: string): void
   onDuplicate(id: string): void
-  /** Moves tab `id` next to `targetId` (after it when `after`). */
-  onMove(id: string, targetId: string, after: boolean): void
+  /** New tab order after a drag. */
+  onReorder(ids: string[]): void
   /** Bumped by the F2 shortcut to start renaming a tab. */
   renameRequest: { id: string; seq: number } | null
 }
 
 type Menu = { x: number; y: number; id: string }
-
-const rightHalf = (e: React.DragEvent): boolean => {
-  const r = e.currentTarget.getBoundingClientRect()
-  return e.clientX > r.left + r.width / 2
-}
 
 /** Returns keyboard focus to the visible terminal. */
 const focusTerminal = (): void => {
@@ -33,10 +32,11 @@ const focusTerminal = (): void => {
 export function TabBar(p: Props): React.JSX.Element {
   const scroller = useRef<HTMLDivElement>(null)
   const menuEl = useRef<HTMLDivElement>(null)
-  const dragging = useRef<string | null>(null)
-  const [dropAt, setDropAt] = useState<{ id: string; after: boolean } | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [menu, setMenu] = useState<Menu | null>(null)
+  // A few pixels of movement before a drag starts, so clicks, double clicks and
+  // middle clicks behave as usual.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   useEffect(() => {
     if (p.renameRequest) setEditing(p.renameRequest.id)
@@ -68,11 +68,6 @@ export function TabBar(p: Props): React.JSX.Element {
     el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - r.height - 8))}px`
   }, [menu])
 
-  const endDrag = (): void => {
-    dragging.current = null
-    setDropAt(null)
-  }
-
   const finishRename = (id: string, value: string | null): void => {
     setEditing(null)
     const title = value?.trim()
@@ -83,6 +78,12 @@ export function TabBar(p: Props): React.JSX.Element {
   const menuAction = (fn: () => void) => (): void => {
     setMenu(null)
     fn()
+  }
+
+  const onDragEnd = ({ active, over }: DragEndEvent): void => {
+    if (!over || active.id === over.id) return
+    const ids = p.tabs.map((t) => t.id)
+    p.onReorder(arrayMove(ids, ids.indexOf(String(active.id)), ids.indexOf(String(over.id))))
   }
 
   return (
@@ -96,86 +97,32 @@ export function TabBar(p: Props): React.JSX.Element {
           if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY
         }}
       >
-        {p.tabs.map((t) => (
-          <div
-            key={t.id}
-            data-tab={t.id}
-            className={[
-              'tab',
-              t.id === p.activeId && 'active',
-              dropAt?.id === t.id && (dropAt.after ? 'drop-after' : 'drop-before')
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            title={t.title}
-            draggable={editing !== t.id}
-            onMouseDown={(e) => {
-              // Middle button: stop Chromium's autoscroll so the click below always closes.
-              if (e.button === 1) e.preventDefault()
-              else if (e.button === 0) p.onActivate(t.id)
-            }}
-            onAuxClick={(e) => {
-              if (e.button !== 1) return
-              e.preventDefault()
-              p.onClose(t.id)
-            }}
-            onDoubleClick={() => setEditing(t.id)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              p.onActivate(t.id)
-              setMenu({ x: e.clientX, y: e.clientY, id: t.id })
-            }}
-            onDragStart={(e) => {
-              dragging.current = t.id
-              e.dataTransfer.effectAllowed = 'move'
-              e.dataTransfer.setData('application/x-liman-tab', t.id)
-            }}
-            onDragOver={(e) => {
-              if (!dragging.current) return
-              e.preventDefault()
-              e.dataTransfer.dropEffect = 'move'
-              setDropAt({ id: t.id, after: rightHalf(e) })
-            }}
-            onDrop={(e) => {
-              const id = dragging.current
-              if (!id) return
-              e.preventDefault()
-              const after = rightHalf(e)
-              endDrag()
-              if (id !== t.id) p.onMove(id, t.id, after)
-            }}
-            onDragEnd={endDrag}
-          >
-            <span className={`status-dot ${t.status}`} />
-            {editing === t.id ? (
-              <input
-                className="tab-rename"
-                autoFocus
-                defaultValue={t.title}
-                spellCheck={false}
-                onFocus={(e) => e.target.select()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onDoubleClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') finishRename(t.id, e.currentTarget.value)
-                  else if (e.key === 'Escape') finishRename(t.id, null)
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[restrictToHorizontalAxis]}
+          onDragStart={({ active }) => p.onActivate(String(active.id))}
+          onDragEnd={onDragEnd}
+        >
+          <SortableContext items={p.tabs.map((t) => t.id)} strategy={horizontalListSortingStrategy}>
+            {p.tabs.map((t) => (
+              <SortableTab
+                key={t.id}
+                tab={t}
+                active={t.id === p.activeId}
+                editing={editing === t.id}
+                onActivate={() => p.onActivate(t.id)}
+                onClose={() => p.onClose(t.id)}
+                onStartRename={() => setEditing(t.id)}
+                onFinishRename={(value) => finishRename(t.id, value)}
+                onMenu={(x, y) => {
+                  p.onActivate(t.id)
+                  setMenu({ x, y, id: t.id })
                 }}
-                onBlur={(e) => editing === t.id && finishRename(t.id, e.currentTarget.value)}
               />
-            ) : (
-              <span className="tab-title">{t.title}</span>
-            )}
-            <button
-              className="tab-close"
-              onMouseDown={(e) => e.button === 0 && e.stopPropagation()}
-              onClick={() => p.onClose(t.id)}
-              aria-label="Close tab"
-            >
-              <X size={13} />
-            </button>
-          </div>
-        ))}
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
 
       {menu && (
@@ -197,5 +144,92 @@ export function TabBar(p: Props): React.JSX.Element {
         </div>
       )}
     </>
+  )
+}
+
+interface TabProps {
+  tab: Tab
+  active: boolean
+  editing: boolean
+  onActivate(): void
+  onClose(): void
+  onStartRename(): void
+  onFinishRename(value: string | null): void
+  onMenu(x: number, y: number): void
+}
+
+function SortableTab({ tab, active, editing, onActivate, onClose, onStartRename, onFinishRename, onMenu }: TabProps): React.JSX.Element {
+  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+    id: tab.id,
+    disabled: editing
+  })
+  // Enter/Escape finish the rename; the blur that follows must not finish it again.
+  const finished = useRef(false)
+  useEffect(() => {
+    if (editing) finished.current = false
+  }, [editing])
+  const finish = (value: string | null): void => {
+    if (finished.current) return
+    finished.current = true
+    onFinishRename(value)
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      data-tab={tab.id}
+      className={['tab', active && 'active', isDragging && 'lifted'].filter(Boolean).join(' ')}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      title={tab.title}
+      {...attributes}
+      {...listeners}
+      tabIndex={-1}
+      onMouseDown={(e) => {
+        // Middle button: stop Chromium's autoscroll so the click below always closes.
+        if (e.button === 1) e.preventDefault()
+        else if (e.button === 0) onActivate()
+      }}
+      onAuxClick={(e) => {
+        if (e.button !== 1) return
+        e.preventDefault()
+        onClose()
+      }}
+      onDoubleClick={onStartRename}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        onMenu(e.clientX, e.clientY)
+      }}
+    >
+      <span className={`status-dot ${tab.status}`} />
+      {editing ? (
+        <input
+          className="tab-rename"
+          autoFocus
+          defaultValue={tab.title}
+          spellCheck={false}
+          onFocus={(e) => e.target.select()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') finish(e.currentTarget.value)
+            else if (e.key === 'Escape') finish(null)
+          }}
+          onBlur={(e) => finish(e.currentTarget.value)}
+        />
+      ) : (
+        <span className="tab-title">{tab.title}</span>
+      )}
+      <button
+        className="tab-close"
+        onPointerDown={(e) => e.button === 0 && e.stopPropagation()}
+        onMouseDown={(e) => e.button === 0 && e.stopPropagation()}
+        onClick={onClose}
+        aria-label="Close tab"
+      >
+        <X size={13} />
+      </button>
+    </div>
   )
 }

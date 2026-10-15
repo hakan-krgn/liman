@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Host, HostInput, Settings } from '@shared/types'
+import { moveGroupIn, moveHostIn } from '@shared/order'
 
 interface StoredHost extends Omit<Host, 'hasPassword' | 'hasPassphrase'> {
   password?: string // encrypted, base64
@@ -57,22 +58,6 @@ function load(): StoreData {
 
 /** Ungrouped hosts sort first. */
 const groupKey = (h: { group?: string }): string => (h.group ? `1${h.group}` : '0')
-const groupOf = (h: { group?: string }): string => h.group?.trim() || ''
-
-/**
- * The order the sidebar shows: ungrouped hosts first, then each group (in order of
- * its first host) as one contiguous block. Moves work on this so they match the screen.
- */
-function displayOrder<T extends { group?: string }>(hosts: T[]): T[] {
-  const groups = new Map<string, T[]>([['', []]])
-  for (const h of hosts) {
-    const g = groupOf(h)
-    if (!groups.has(g)) groups.set(g, [])
-    groups.get(g)!.push(h)
-  }
-  return [...groups.values()].flat()
-}
-
 function save(): void {
   const tmp = file + '.tmp'
   writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 })
@@ -149,18 +134,7 @@ export const store = {
    */
   moveHost(id: string, group: string, beforeId: string | null): Host[] {
     const d = load()
-    d.hosts = displayOrder(d.hosts)
-    const from = d.hosts.findIndex((h) => h.id === id)
-    if (from < 0) throw new Error('Host not found')
-    const [host] = d.hosts.splice(from, 1)
-    host.group = group.trim() || undefined
-    let at = beforeId ? d.hosts.findIndex((h) => h.id === beforeId) : -1
-    if (at < 0) {
-      const last = d.hosts.findLastIndex((h) => groupOf(h) === groupOf(host))
-      at = last >= 0 ? last + 1 : d.hosts.length
-    }
-    d.hosts.splice(at, 0, host)
-    d.hosts = displayOrder(d.hosts)
+    d.hosts = moveHostIn(d.hosts, id, group, beforeId)
     save()
     return this.listHosts()
   },
@@ -168,13 +142,7 @@ export const store = {
   /** Moves a whole group before `beforeGroup` (or to the end when null). */
   moveGroup(group: string, beforeGroup: string | null): Host[] {
     const d = load()
-    const ordered = displayOrder(d.hosts)
-    const block = ordered.filter((h) => groupOf(h) === group)
-    const rest = ordered.filter((h) => groupOf(h) !== group)
-    let at = beforeGroup === null ? -1 : rest.findIndex((h) => groupOf(h) === beforeGroup)
-    if (at < 0) at = rest.length
-    rest.splice(at, 0, ...block)
-    d.hosts = displayOrder(rest)
+    d.hosts = moveGroupIn(d.hosts, group, beforeGroup)
     save()
     return this.listHosts()
   },

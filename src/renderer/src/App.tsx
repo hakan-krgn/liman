@@ -173,14 +173,8 @@ export function App(): React.JSX.Element {
     setActiveId(keepId)
   }, [])
 
-  const moveTab = useCallback((id: string, targetId: string, after: boolean) => {
-    setTabs((ts) => {
-      const moving = ts.find((t) => t.id === id)
-      if (!moving) return ts
-      const rest = ts.filter((t) => t.id !== id)
-      const at = rest.findIndex((t) => t.id === targetId) + (after ? 1 : 0)
-      return [...rest.slice(0, at), moving, ...rest.slice(at)]
-    })
+  const reorderTabs = useCallback((ids: string[]) => {
+    setTabs((ts) => ids.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t))
   }, [])
 
   const duplicateTab = useCallback(
@@ -277,7 +271,7 @@ export function App(): React.JSX.Element {
             onCloseOthers={closeOtherTabs}
             onRename={(id, title) => patchTab(id, { title })}
             onDuplicate={duplicateTab}
-            onMove={moveTab}
+            onReorder={reorderTabs}
             renameRequest={renameRequest}
           />
           <div className="tabbar-actions">

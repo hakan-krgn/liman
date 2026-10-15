@@ -1,6 +1,11 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun } from 'lucide-react'
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers'
+import { CSS } from '@dnd-kit/utilities'
 import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
+import { groupOf, moveGroupIn, moveHostIn } from '@shared/order'
 import { parseTarget } from '@shared/target'
 import { api, errorMessage, showDialog } from '../lib'
 import { Logo } from './Logo'
@@ -26,26 +31,21 @@ const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark t
 export const FONT_MIN = 8
 export const FONT_MAX = 32
 
-type Dragging = { kind: 'host'; id: string } | { kind: 'group'; group: string }
-/** Where the dragged item would land, for the drop indicator. */
-type DropAt =
-  | { kind: 'host'; id: string; after: boolean }
-  | { kind: 'group'; group: string; after: boolean }
-  | { kind: 'into'; group: string }
+/** Group headers share the sortable list with hosts; their ids can't clash with host UUIDs. */
+const GROUP = 'group:'
 
-const groupOf = (h: Host): string => h.group?.trim() || ''
-const lowerHalf = (e: React.DragEvent): boolean => {
-  const r = e.currentTarget.getBoundingClientRect()
-  return e.clientY > r.top + r.height / 2
-}
+/** The sidebar as one flat list: ungrouped hosts, then each group header followed by its hosts. */
+type Item =
+  | { kind: 'group'; id: string; group: string; count: number; collapsed: boolean }
+  | { kind: 'host'; id: string; host: Host }
 
 export function Sidebar(p: Props): React.JSX.Element {
   const [query, setQuery] = useState('')
   const ThemeIcon = themeIcon[p.themeMode]
   const searching = query.trim() !== ''
-  const dragging = useRef<Dragging | null>(null)
-  const [dropAt, setDropAt] = useState<DropAt | null>(null)
-  const [draggingHost, setDraggingHost] = useState(false)
+  // While a group is dragged its hosts fold into the header so it moves as one piece.
+  const [draggingGroup, setDraggingGroup] = useState<string | null>(null)
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
 
   // Hosts keep the user's order; groups appear in the order of their first host,
   // with ungrouped hosts on top.
@@ -60,10 +60,19 @@ export function Sidebar(p: Props): React.JSX.Element {
     return [...map.entries()].filter(([g, hs]) => g !== '' || hs.length > 0)
   }, [p.hosts, query])
 
-  const groupNames = groups.map(([g]) => g).filter(Boolean)
-  const hasUngrouped = groups.some(([g]) => g === '')
   const collapsed = new Set(p.collapsedGroups)
   const isCollapsed = (g: string): boolean => !searching && collapsed.has(g)
+
+  const items = useMemo(() => {
+    const out: Item[] = []
+    for (const [group, hosts] of groups) {
+      const folded = !searching && (collapsed.has(group) || draggingGroup === group)
+      if (group) out.push({ kind: 'group', id: GROUP + group, group, count: hosts.length, collapsed: folded })
+      if (!folded) for (const host of hosts) out.push({ kind: 'host', id: host.id, host })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, p.collapsedGroups, draggingGroup, searching])
 
   const toggleGroup = (g: string): void => {
     const next = collapsed.has(g) ? p.collapsedGroups.filter((x) => x !== g) : [...p.collapsedGroups, g]
@@ -80,84 +89,35 @@ export function Sidebar(p: Props): React.JSX.Element {
   }
 
   // ------------------------------------------------------------ reordering
-  const apply = (moving: Promise<Host[]>): void => {
-    moving.then(p.onHostsChange).catch((e) =>
-      showDialog({ title: "Couldn't move", message: errorMessage(e), buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }] })
-    )
+  /** Shows the new order at once, then saves it (and takes the stored result). */
+  const apply = (optimistic: Host[], saving: Promise<Host[]>): void => {
+    p.onHostsChange(optimistic)
+    saving.then(p.onHostsChange).catch((e) => {
+      void api.listHosts().then(p.onHostsChange)
+      void showDialog({ title: "Couldn't move", message: errorMessage(e), buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }] })
+    })
   }
 
-  const endDrag = (): void => {
-    dragging.current = null
-    setDropAt(null)
-    setDraggingHost(false)
-  }
+  const onDragEnd = ({ active, over }: DragEndEvent): void => {
+    setDraggingGroup(null)
+    if (!over || active.id === over.id) return
+    const ids = items.map((i) => i.id)
+    const next = arrayMove(items, ids.indexOf(String(active.id)), ids.indexOf(String(over.id)))
+    const at = next.findIndex((i) => i.id === active.id)
+    const moved = next[at]
 
-  const startHostDrag = (e: React.DragEvent, h: Host): void => {
-    dragging.current = { kind: 'host', id: h.id }
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('application/x-liman-host', h.id)
-    // Defer so the drag image is taken before the row restyles.
-    requestAnimationFrame(() => dragging.current?.kind === 'host' && setDraggingHost(true))
-  }
-
-  const startGroupDrag = (e: React.DragEvent, group: string): void => {
-    dragging.current = { kind: 'group', group }
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('application/x-liman-group', group)
-  }
-
-  const overHost = (e: React.DragEvent, h: Host): void => {
-    if (dragging.current?.kind !== 'host') return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    setDropAt({ kind: 'host', id: h.id, after: lowerHalf(e) })
-  }
-
-  const dropOnHost = (e: React.DragEvent, target: Host, siblings: Host[]): void => {
-    const d = dragging.current
-    if (d?.kind !== 'host') return
-    e.preventDefault()
-    const after = lowerHalf(e)
-    endDrag()
-    if (d.id === target.id) return
-    const rest = siblings.filter((h) => h.id !== d.id)
-    const before = after ? (rest[rest.indexOf(target) + 1]?.id ?? null) : target.id
-    apply(api.moveHost(d.id, groupOf(target), before))
-  }
-
-  const overGroup = (e: React.DragEvent, group: string): void => {
-    const d = dragging.current
-    if (!d) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    if (d.kind === 'host') setDropAt({ kind: 'into', group })
-    else setDropAt({ kind: 'group', group, after: lowerHalf(e) })
-  }
-
-  const dropOnGroup = (e: React.DragEvent, group: string): void => {
-    const d = dragging.current
-    if (!d) return
-    e.preventDefault()
-    const after = lowerHalf(e)
-    endDrag()
-    // A host dropped on a group header goes to the end of that group.
-    if (d.kind === 'host') return apply(api.moveHost(d.id, group, null))
-    if (d.group === group) return
-    const rest = groupNames.filter((g) => g !== d.group)
-    const before = after ? (rest[rest.indexOf(group) + 1] ?? null) : group
-    apply(api.moveGroup(d.group, before))
-  }
-
-  const hostClass = (h: Host): string => {
-    const at = dropAt?.kind === 'host' && dropAt.id === h.id ? (dropAt.after ? ' drop-after' : ' drop-before') : ''
-    const self = draggingHost && dragging.current?.kind === 'host' && dragging.current.id === h.id ? ' dragging' : ''
-    return `host-row${at}${self}`
-  }
-
-  const groupClass = (g: string): string => {
-    if (dropAt?.kind === 'into' && dropAt.group === g) return 'group-label drop-into'
-    if (dropAt?.kind === 'group' && dropAt.group === g) return `group-label ${dropAt.after ? 'drop-after' : 'drop-before'}`
-    return 'group-label'
+    if (moved.kind === 'host') {
+      // A host joins the group whose header is above it (none above: ungrouped).
+      const header = next.slice(0, at).findLast((i) => i.kind === 'group')
+      const group = header?.kind === 'group' ? header.group : ''
+      const after = next[at + 1]
+      const before = after?.kind === 'host' ? after.id : null
+      apply(moveHostIn(p.hosts, moved.id, group, before), api.moveHost(moved.id, group, before))
+    } else {
+      const following = next.slice(at + 1).find((i) => i.kind === 'group')
+      const before = following?.kind === 'group' ? following.group : null
+      apply(moveGroupIn(p.hosts, moved.group, before), api.moveGroup(moved.group, before))
+    }
   }
 
   return (
@@ -178,80 +138,40 @@ export function Sidebar(p: Props): React.JSX.Element {
         />
       </div>
 
-      <nav className="host-list" onDragEnd={endDrag} onDragLeave={(e) => e.target === e.currentTarget && setDropAt(null)}>
-        {/* Lets a grouped host be dragged out of its group when nothing is ungrouped yet. */}
-        {draggingHost && !hasUngrouped && (
-          <div
-            className={`ungroup-zone ${dropAt?.kind === 'into' && dropAt.group === '' ? 'active' : ''}`}
-            onDragOver={(e) => overGroup(e, '')}
-            onDrop={(e) => dropOnGroup(e, '')}
-          >
-            Drop here to remove from group
-          </div>
-        )}
-
-        {groups.map(([group, hosts]) => (
-          <div key={group || '\u0000'} className="host-group">
-            {group && (
-              <div
-                className={groupClass(group)}
-                role="button"
-                tabIndex={0}
-                draggable={!searching}
-                onClick={() => toggleGroup(group)}
-                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggleGroup(group))}
-                onDragStart={(e) => startGroupDrag(e, group)}
-                onDragOver={(e) => overGroup(e, group)}
-                onDrop={(e) => dropOnGroup(e, group)}
-                aria-expanded={!isCollapsed(group)}
-                title={isCollapsed(group) ? 'Expand group' : 'Collapse group'}
-              >
-                <ChevronRight size={13} className={`chevron ${isCollapsed(group) ? '' : 'open'}`} />
-                <span className="group-name">{group}</span>
-                {isCollapsed(group) && <span className="group-count">{hosts.length}</span>}
-              </div>
+      <nav className="host-list">
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[restrictToVerticalAxis]}
+          onDragStart={({ active }) => {
+            const id = String(active.id)
+            if (id.startsWith(GROUP)) setDraggingGroup(id.slice(GROUP.length))
+          }}
+          onDragEnd={onDragEnd}
+          onDragCancel={() => setDraggingGroup(null)}
+        >
+          <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+            {items.map((item) =>
+              item.kind === 'group' ? (
+                <SortableGroup
+                  key={item.id}
+                  item={item}
+                  disabled={searching}
+                  onToggle={() => toggleGroup(item.group)}
+                />
+              ) : (
+                <SortableHost
+                  key={item.id}
+                  host={item.host}
+                  live={p.connected.has(item.host.id)}
+                  disabled={searching}
+                  onConnect={() => p.onConnect(item.host)}
+                  onEdit={() => p.onEdit(item.host)}
+                />
+              )
             )}
-            {!isCollapsed(group) &&
-              hosts.map((h) => (
-                <div
-                  key={h.id}
-                  className={hostClass(h)}
-                  role="button"
-                  tabIndex={0}
-                  draggable={!searching}
-                  onClick={() => p.onConnect(h)}
-                  onKeyDown={(e) => e.key === 'Enter' && p.onConnect(h)}
-                  onDragStart={(e) => startHostDrag(e, h)}
-                  onDragOver={(e) => overHost(e, h)}
-                  onDrop={(e) => dropOnHost(e, h, hosts)}
-                  title={`Connect to ${h.username}@${h.host}`}
-                >
-                  {!searching && <GripVertical size={12} className="grip" aria-hidden />}
-                  <span className="host-icon">
-                    <Server size={14} />
-                    {p.connected.has(h.id) && <span className="live" />}
-                  </span>
-                  <span className="host-text">
-                    <span className="host-name">{h.name}</span>
-                    <span className="host-sub">
-                      {h.username}@{h.host}
-                      {h.port !== 22 ? `:${h.port}` : ''}
-                    </span>
-                  </span>
-                  <button
-                    className="host-edit"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      p.onEdit(h)
-                    }}
-                    aria-label="Edit host"
-                  >
-                    <Pencil size={13} />
-                  </button>
-                </div>
-              ))}
-          </div>
-        ))}
+          </SortableContext>
+        </DndContext>
         {p.hosts.length > 0 && groups.length === 0 && (
           <div className="list-empty">
             No match.{' '}
@@ -290,5 +210,104 @@ export function Sidebar(p: Props): React.JSX.Element {
         </div>
       </div>
     </aside>
+  )
+}
+
+/** Position styles from dnd-kit: the dragged item follows the pointer, the rest slide aside. */
+function useSortableItem(id: string, disabled: boolean) {
+  const s = useSortable({ id, disabled })
+  return {
+    ...s,
+    style: { transform: CSS.Translate.toString(s.transform), transition: s.transition }
+  }
+}
+
+function SortableGroup({
+  item,
+  disabled,
+  onToggle
+}: {
+  item: Extract<Item, { kind: 'group' }>
+  disabled: boolean
+  onToggle(): void
+}): React.JSX.Element {
+  const { setNodeRef, attributes, listeners, style, isDragging } = useSortableItem(item.id, disabled)
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group-label ${isDragging ? 'lifted' : ''}`}
+      {...attributes}
+      {...listeners}
+      role="button"
+      tabIndex={0}
+      onClick={onToggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onToggle()
+        }
+      }}
+      aria-expanded={!item.collapsed}
+      title={item.collapsed ? 'Expand group' : 'Collapse group'}
+    >
+      <ChevronRight size={13} className={`chevron ${item.collapsed ? '' : 'open'}`} />
+      <span className="group-name">{item.group}</span>
+      {item.collapsed && <span className="group-count">{item.count}</span>}
+    </div>
+  )
+}
+
+function SortableHost({
+  host,
+  live,
+  disabled,
+  onConnect,
+  onEdit
+}: {
+  host: Host
+  live: boolean
+  disabled: boolean
+  onConnect(): void
+  onEdit(): void
+}): React.JSX.Element {
+  const { setNodeRef, attributes, listeners, style, isDragging } = useSortableItem(host.id, disabled)
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`host-row ${isDragging ? 'lifted' : ''}`}
+      {...attributes}
+      {...listeners}
+      role="button"
+      tabIndex={0}
+      onClick={onConnect}
+      onKeyDown={(e) => e.key === 'Enter' && onConnect()}
+      title={`Connect to ${host.username}@${host.host}`}
+    >
+      {!disabled && <GripVertical size={12} className="grip" aria-hidden />}
+      <span className="host-icon">
+        <Server size={14} />
+        {live && <span className="live" />}
+      </span>
+      <span className="host-text">
+        <span className="host-name">{host.name}</span>
+        <span className="host-sub">
+          {host.username}@{host.host}
+          {host.port !== 22 ? `:${host.port}` : ''}
+        </span>
+      </span>
+      <button
+        className="host-edit"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          onEdit()
+        }}
+        aria-label="Edit host"
+      >
+        <Pencil size={13} />
+      </button>
+    </div>
   )
 }

@@ -294,40 +294,9 @@ code {
   background: var(--active);
   color: var(--muted);
 }
-.group-label.drop-into {
-  color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1.5px var(--accent);
-}
-
-/* Drop position while reordering hosts and groups. */
-.host-row.drop-before::before,
-.host-row.drop-after::after,
-.group-label.drop-before::before,
-.group-label.drop-after::after {
-  content: '';
-  position: absolute;
-  left: 6px;
-  right: 6px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-  pointer-events: none;
-}
-.host-row.drop-before::before,
-.group-label.drop-before::before {
-  top: -1px;
-}
-.host-row.drop-after::after,
-.group-label.drop-after::after {
-  bottom: -1px;
-}
-.host-row.dragging {
-  opacity: 0.4;
-}
 .host-row .grip {
   position: absolute;
-  left: -4px;
+  left: -1px;
   color: var(--faint);
   opacity: 0;
   cursor: grab;
@@ -335,20 +304,6 @@ code {
 }
 .host-row:hover .grip {
   opacity: 1;
-}
-.ungroup-zone {
-  margin: 4px 0 6px;
-  padding: 10px;
-  border: 1.5px dashed var(--border);
-  border-radius: 8px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--faint);
-}
-.ungroup-zone.active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 .host-row {
   position: relative;
@@ -541,24 +496,6 @@ code {
   cursor: default;
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
-}
-/* Where a dragged tab will land. */
-.tab.drop-before::before,
-.tab.drop-after::after {
-  content: '';
-  position: absolute;
-  top: 5px;
-  bottom: 5px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-  pointer-events: none;
-}
-.tab.drop-before::before {
-  left: -3px;
-}
-.tab.drop-after::after {
-  right: -3px;
 }
 .tab-rename {
   width: 130px;
@@ -1219,4 +1156,84 @@ code {
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
+}
+
+/* ------------------------------------------------------- drag & click feel */
+
+/* The item being dragged: lifted above the rest, which slide aside to show where it lands. */
+.host-row.lifted,
+.group-label.lifted,
+.tab.lifted {
+  z-index: 10;
+  scale: 1.02;
+  cursor: grabbing;
+  background: var(--surface);
+  box-shadow: var(--shadow), 0 0 0 1.5px var(--accent);
+}
+.group-label.lifted {
+  color: var(--accent);
+}
+
+/* Press feedback. `scale` (not `transform`) so it never fights the drag offsets. */
+.btn,
+.icon-btn,
+.host-row,
+.tab,
+.group-label,
+.menu button,
+.update-notice,
+.segmented button,
+.sftp-row {
+  position: relative;
+  transition-property: background, color, border-color, box-shadow, opacity, scale;
+  transition-duration: 0.12s;
+}
+.btn:active:not(:disabled),
+.icon-btn:active:not(:disabled),
+.host-row:active,
+.tab:active,
+.group-label:active,
+.menu button:active:not(:disabled),
+.update-notice:active,
+.segmented button:active,
+.sftp-row:active {
+  scale: 0.97;
+}
+.btn.primary:active:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+/* Click ripple, added by main.tsx. */
+.ripple-host {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.18;
+  transform: scale(0);
+  animation: ripple 0.5s ease-out forwards;
+}
+.btn.primary .ripple {
+  background: #fff;
+  opacity: 0.35;
+}
+@keyframes ripple {
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ripple-host {
+    display: none;
+  }
+  * {
+    scale: none !important;
+  }
 }
