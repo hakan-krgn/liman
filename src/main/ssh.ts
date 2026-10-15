@@ -70,7 +70,8 @@ interface LoginInfo {
 
 interface ActiveTransfer extends Transfer {
   cancelled: boolean
-  sftp?: SFTPWrapper
+  /** The transfer's own SFTP channels; closing them aborts it. */
+  channels: SFTPWrapper[]
 }
 
 const CONNECT_TIMEOUT = 20_000
@@ -90,7 +91,10 @@ const S_IFMT = 0o170000
 const S_IFDIR = 0o040000
 const S_IFLNK = 0o120000
 
-type FileJob = { from: string; to: string; size: number }
+type FileJob = { from: string; to: string; size: number; mode?: number }
+
+/** Bytes per SFTP read/write request when copying between two servers. */
+const CHUNK = 32 * 1024
 
 /** Natural order: file2 before file10. */
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
@@ -839,53 +843,180 @@ export class SessionManager {
     afterFile?: (path: string) => Promise<void>
   ): Promise<boolean> {
     const t = this.startTransfer(s.id, direction, label, target, files.reduce((n, f) => n + f.size, 0))
-    let sftp: SFTPWrapper | undefined
-    s.activeTransfers++
-    clearTimeout(s.transferIdle)
+    this.holdTransfer(s)
     try {
       // A separate connection keeps bulk data from queueing in front of keystrokes.
-      sftp = await openSftp((await this.transferClient(s)) ?? s.client)
-      t.sftp = sftp
+      const sftp = await this.transferSftp(s)
+      t.channels.push(sftp)
       await prepare(sftp)
-      let finished = 0
-      const inFlight = new Map<FileJob, number>()
-      const report = (force = false): void => {
-        if (t.status !== 'running') return
-        let n = finished
-        for (const v of inFlight.values()) n += v
-        this.progress(t, n, force)
-      }
-      await pool(files, PARALLEL, async (f) => {
-        if (t.cancelled) return
-        inFlight.set(f, 0)
-        const step = (n: number): void => {
-          inFlight.set(f, n)
-          report()
-        }
-        await promisify<void>((cb) =>
+      await this.runFiles(t, files, (f, step) =>
+        promisify<void>((cb) =>
           direction === 'up'
-            ? sftp!.fastPut(f.from, f.to, { step, concurrency: CHUNKS_IN_FLIGHT }, cb)
-            : sftp!.fastGet(f.from, f.to, { step, concurrency: CHUNKS_IN_FLIGHT }, cb)
-        )
-        await afterFile?.(f.to)
-        inFlight.delete(f)
-        finished += f.size
-        report(true)
+            ? sftp.fastPut(f.from, f.to, { step, concurrency: CHUNKS_IN_FLIGHT }, cb)
+            : sftp.fastGet(f.from, f.to, { step, concurrency: CHUNKS_IN_FLIGHT }, cb)
+        ).then(() => afterFile?.(f.to))
+      )
+      this.finish(t)
+    } catch (err) {
+      this.finish(t, err as Error)
+    } finally {
+      for (const c of t.channels) c.end()
+      this.releaseTransfer(s)
+    }
+    return t.status === 'done'
+  }
+
+  /** An SFTP channel on the session's transfer connection (or the terminal's, as a fallback). */
+  private async transferSftp(s: Session): Promise<SFTPWrapper> {
+    return openSftp((await this.transferClient(s)) ?? s.client)
+  }
+
+  private holdTransfer(s: Session): void {
+    s.activeTransfers++
+    clearTimeout(s.transferIdle)
+  }
+
+  /** Closes the transfer connection once it has been idle for a while. */
+  private releaseTransfer(s: Session): void {
+    if (--s.activeTransfers > 0) return
+    s.transferIdle = setTimeout(() => {
+      const conn = s.transferConn
+      s.transferConn = undefined
+      void conn?.then((c) => c?.end())
+    }, TRANSFER_IDLE)
+  }
+
+  /** Copies files several at a time, reporting combined progress on `t`. */
+  private async runFiles(
+    t: ActiveTransfer,
+    files: FileJob[],
+    copy: (f: FileJob, step: (bytes: number) => void) => Promise<unknown>
+  ): Promise<void> {
+    let finished = 0
+    const inFlight = new Map<FileJob, number>()
+    const report = (force = false): void => {
+      if (t.status !== 'running') return
+      let n = finished
+      for (const v of inFlight.values()) n += v
+      this.progress(t, n, force)
+    }
+    await pool(files, PARALLEL, async (f) => {
+      if (t.cancelled) return
+      inFlight.set(f, 0)
+      await copy(f, (n) => {
+        inFlight.set(f, n)
+        report()
+      })
+      inFlight.delete(f)
+      finished += f.size
+      report(true)
+    })
+  }
+
+  // ------------------------------------------------------- between servers
+
+  /** Where a copy to `sessionId` would land, and which top-level names already exist there. */
+  async prepareCopy(sessionId: string, names: string[], dir?: string): Promise<{ dir: string; conflicts: string[] }> {
+    const s = this.get(sessionId)
+    const [target, sftp] = await Promise.all([dir ?? this.getCwd(sessionId), this.sftp(s)])
+    const taken = await Promise.all(names.map((n) => exists(sftp, posix.join(target, n))))
+    return { dir: target, conflicts: names.filter((_, i) => taken[i]) }
+  }
+
+  /**
+   * Copies files and folders from one open session to another. Data streams
+   * through Liman (nothing is stored locally), so the servers don't need to
+   * reach or trust each other.
+   */
+  async copyBetween(fromId: string, paths: string[], toId: string, dir: string, mode: ConflictMode): Promise<void> {
+    const src = this.get(fromId)
+    const dst = this.get(toId)
+    const [srcBrowse, dstBrowse] = await Promise.all([this.sftp(src), this.sftp(dst)])
+    const stat = (p: string): Promise<{ mode: number; size: number }> => promisify((cb) => srcBrowse.stat(p, cb))
+
+    const dirs: string[] = []
+    const files: FileJob[] = []
+    let level: { from: string; to: string }[] = []
+    for (const p of paths) {
+      let name = posix.basename(p)
+      if (mode === 'keepBoth') name = await uniqueName(name, (n) => exists(dstBrowse, posix.join(dir, n)))
+      const to = posix.join(dir, name)
+      const st = await stat(p)
+      if ((st.mode & S_IFMT) === S_IFDIR) {
+        dirs.push(to)
+        level.push({ from: p, to })
+      } else if ((st.mode & S_IFMT) === 0o100000) {
+        files.push({ from: p, to, size: st.size, mode: st.mode })
+      } else {
+        throw new Error(`${name} is not a regular file`)
+      }
+    }
+    // Breadth-first; symlinked folders below the top level are skipped (no loops).
+    while (level.length) {
+      const next: typeof level = []
+      await pool(level, PARALLEL, async (d) => {
+        for (const it of await readdirFast(srcBrowse, d.from)) {
+          const from = posix.join(d.from, it.filename)
+          const to = posix.join(d.to, it.filename)
+          let { mode: m, size } = it.attrs
+          if ((m & S_IFMT) === S_IFLNK) {
+            const st = await stat(from).catch(() => null)
+            if (!st || (st.mode & S_IFMT) === S_IFDIR) continue
+            m = st.mode
+            size = st.size
+          }
+          if ((m & S_IFMT) === S_IFDIR) {
+            dirs.push(to)
+            next.push({ from, to })
+          } else if ((m & S_IFMT) === 0o100000) {
+            files.push({ from, to, size, mode: m })
+          }
+        }
+      })
+      level = next
+    }
+
+    const label = paths.length === 1 ? posix.basename(paths[0]) : `${paths.length} items`
+    const t = this.startTransfer(toId, 'copy', label, dir, files.reduce((n, f) => n + f.size, 0))
+    t.sourceHost = sessionLabel(src)
+    t.targetHost = sessionLabel(dst)
+    this.emitTransfer(t)
+    this.holdTransfer(src)
+    this.holdTransfer(dst)
+    try {
+      const [from, to] = await Promise.all([this.transferSftp(src), this.transferSftp(dst)])
+      t.channels.push(from, to)
+      for (const d of dirs) {
+        await promisify<void>((cb) => to.mkdir(d, cb)).catch(async (err) => {
+          const st = await promisify<{ mode: number }>((cb) => to.stat(d, cb)).catch(() => null)
+          if (!st || (st.mode & S_IFMT) !== S_IFDIR) throw err
+        })
+      }
+      await this.runFiles(t, files, async (f, step) => {
+        await pipeFile(from, f.from, to, f.to, f.size, step)
+        // Keep permissions such as the executable bit.
+        if (f.mode !== undefined) await promisify<void>((cb) => to.chmod(f.to, f.mode! & 0o7777, cb)).catch(() => {})
       })
       this.finish(t)
     } catch (err) {
       this.finish(t, err as Error)
     } finally {
-      sftp?.end()
-      if (--s.activeTransfers === 0) {
-        s.transferIdle = setTimeout(() => {
-          const conn = s.transferConn
-          s.transferConn = undefined
-          void conn?.then((c) => c?.end())
-        }, TRANSFER_IDLE)
-      }
+      for (const c of t.channels) c.end()
+      this.releaseTransfer(src)
+      this.releaseTransfer(dst)
     }
-    return t.status === 'done'
+  }
+
+  /** Moves entries into `dir` on the same server (a rename, so it's instant). */
+  async moveInto(sessionId: string, paths: string[], dir: string): Promise<void> {
+    const sftp = await this.sftp(this.get(sessionId))
+    for (const p of paths) {
+      if (dir === p || dir.startsWith(p.endsWith('/') ? p : p + '/')) throw new Error(`Can't move ${posix.basename(p)} into itself`)
+      if (posix.dirname(p) === dir) continue
+      const to = posix.join(dir, posix.basename(p))
+      if (await exists(sftp, to)) throw new Error(`${posix.basename(p)} already exists in ${dir}`)
+      await promisify<void>((cb) => sftp.rename(p, to, cb))
+    }
   }
 
   /**
@@ -959,13 +1090,13 @@ export class SessionManager {
     const t = this.transfers.get(id)
     if (!t || t.status !== 'running') return
     t.cancelled = true
-    // Closing the transfer's own SFTP channel aborts in-flight fastPut/fastGet calls.
-    t.sftp?.end()
+    // Closing the transfer's own SFTP channels aborts the requests in flight.
+    for (const c of t.channels) c.end()
   }
 
   private startTransfer(
     sessionId: string,
-    direction: 'up' | 'down',
+    direction: Transfer['direction'],
     label: string,
     target: string,
     total: number
@@ -979,7 +1110,8 @@ export class SessionManager {
       total,
       done: 0,
       status: 'running',
-      cancelled: false
+      cancelled: false,
+      channels: []
     }
     this.transfers.set(t.id, t)
     this.emitTransfer(t)
@@ -1004,7 +1136,7 @@ export class SessionManager {
     this.lastEmit.delete(t.id)
   }
 
-  private emitTransfer({ cancelled: _c, sftp: _s, ...t }: ActiveTransfer): void {
+  private emitTransfer({ cancelled: _c, channels: _ch, ...t }: ActiveTransfer): void {
     this.bridge.send('transfer:update', t)
   }
 }
@@ -1026,6 +1158,84 @@ function hostKeyId(key: Buffer): string {
   const fingerprint = 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '')
   const keyType = key.subarray(4, 4 + key.readUInt32BE(0)).toString()
   return `${keyType} ${fingerprint}`
+}
+
+/** "user@host" of a logged-in session, for transfer labels. */
+function sessionLabel(s: Session): string {
+  return s.login ? `${s.login.username}@${s.login.host}` : 'server'
+}
+
+/**
+ * Streams one file from an SFTP channel to another, keeping several reads and
+ * writes in flight (like fastGet/fastPut, but server to server).
+ */
+function pipeFile(
+  src: SFTPWrapper,
+  from: string,
+  dst: SFTPWrapper,
+  to: string,
+  size: number,
+  step: (bytes: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    src.open(from, 'r', (err, rh) => {
+      if (err) return reject(err)
+      dst.open(to, 'w', (err2, wh) => {
+        if (err2) {
+          src.close(rh, () => {})
+          return reject(err2)
+        }
+        // Ranges still to copy; a short read puts its remainder back in the queue.
+        const queue: [number, number][] = []
+        let next = 0
+        let copied = 0
+        let active = 0
+        let failure: Error | undefined
+        let settled = false
+        const settle = (): void => {
+          if (settled || active > 0) return
+          settled = true
+          src.close(rh, () => {})
+          dst.close(wh, (closeErr) => (failure ? reject(failure) : closeErr ? reject(closeErr) : resolve()))
+        }
+        const take = (): [number, number] | undefined => {
+          if (queue.length) return queue.shift()
+          if (next >= size) return undefined
+          const range: [number, number] = [next, Math.min(CHUNK, size - next)]
+          next += range[1]
+          return range
+        }
+        const pump = (): void => {
+          if (failure) return settle()
+          let range: [number, number] | undefined
+          while (active < CHUNKS_IN_FLIGHT && (range = take())) {
+            const [off, len] = range
+            const buf = Buffer.allocUnsafe(len)
+            active++
+            src.read(rh, buf, 0, len, off, (readErr, bytes) => {
+              if (readErr || !bytes) {
+                active--
+                failure ??= readErr ?? new Error(`${posix.basename(from)} changed while copying`)
+                return pump()
+              }
+              if (bytes < len) queue.push([off + bytes, len - bytes])
+              dst.write(wh, buf, 0, bytes, off, (writeErr) => {
+                active--
+                if (writeErr) failure ??= writeErr
+                else {
+                  copied += bytes
+                  step(copied)
+                }
+                pump()
+              })
+            })
+          }
+          if (active === 0 && !queue.length && next >= size) settle()
+        }
+        pump()
+      })
+    })
+  })
 }
 
 function openSftp(client: Client): Promise<SFTPWrapper> {

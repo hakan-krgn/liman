@@ -9,6 +9,7 @@ import {
   FolderPlus,
   Pencil,
   RefreshCw,
+  Send,
   Trash2,
   Upload,
   X
@@ -18,6 +19,8 @@ import {
   api,
   cachedListing,
   confirmDialog,
+  copyWithConfirm,
+  currentRemoteDrag,
   droppedPaths,
   errorMessage,
   fetchListing,
@@ -26,15 +29,25 @@ import {
   hasFiles,
   invalidateListing,
   isMac,
+  isRemoteDrag,
+  REMOTE_DRAG,
+  setRemoteDrag,
   type Listing,
   showDialog,
   textDialog,
   uploadWithConfirm
 } from '../lib'
 
+/** Another open, connected tab that files can be sent to. */
+export interface Peer {
+  sessionId: string
+  title: string
+}
+
 interface Props {
   sessionId?: string
   connected: boolean
+  peers: Peer[]
   onClose(): void
 }
 
@@ -43,7 +56,7 @@ type Menu = { x: number; y: number; entry?: RemoteEntry }
 const parentOf = (p: string): string => (p === '/' ? '/' : p.replace(/\/[^/]+\/?$/, '') || '/')
 const joinPath = (dir: string, name: string): string => (dir.endsWith('/') ? dir : dir + '/') + name
 
-export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.Element {
+export function SftpPanel({ sessionId, connected, peers, onClose }: Props): React.JSX.Element {
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<RemoteEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -132,7 +145,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
   useEffect(
     () =>
       api.onTransfer((t) => {
-        if (!sessionId || t.sessionId !== sessionId || t.direction !== 'up' || t.status === 'running') return
+        if (!sessionId || t.sessionId !== sessionId || t.direction === 'down' || t.status === 'running') return
         if (t.target === pathRef.current) void load(pathRef.current, true)
         else invalidateListing(sessionId, t.target)
       }),
@@ -193,6 +206,11 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     void load(path, true)
   }
 
+  /** Copies entries to another open session, into its terminal's current folder. */
+  const sendTo = (peer: Peer, items: RemoteEntry[]): void => {
+    if (sessionId && items.length) copyWithConfirm(sessionId, items.map((i) => i.path), peer.sessionId).catch(fail)
+  }
+
   const open = (item: RemoteEntry): void => {
     if (item.isDir) void load(item.path)
     else download([item])
@@ -235,19 +253,47 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     if (sessionId) uploadWithConfirm(sessionId, paths, dir).catch(fail)
   }
 
+  /** Starts dragging the selection (or just this row) to another panel, folder, terminal or tab. */
+  const startRowDrag = (e: React.DragEvent, item: RemoteEntry): void => {
+    if (!sessionId) return
+    const items = selected.has(item.path) ? selection() : [item]
+    if (!selected.has(item.path)) setSelected(new Set([item.path]))
+    setRemoteDrag({ sessionId, paths: items.map((i) => i.path) })
+    e.dataTransfer.effectAllowed = 'copyMove'
+    e.dataTransfer.setData(REMOTE_DRAG, items.map((i) => i.path).join('\n'))
+  }
+
+  const accepts = (e: React.DragEvent): boolean => hasFiles(e) || isRemoteDrag(e)
+
+  /** Where a drop would go: the folder row under the pointer, or the open folder. */
+  const targetOf = (e: React.DragEvent): string =>
+    (e.target as HTMLElement).closest<HTMLElement>('[data-dir]')?.dataset.dir ?? path
+
   const panelDrop = {
     onDragEnter: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return
+      if (!accepts(e)) return
       e.preventDefault()
       dragDepth.current++
     },
     onDragOver: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
-      // Hovering a folder row targets that folder, anything else the open folder.
-      const row = (e.target as HTMLElement).closest<HTMLElement>('[data-dir]')
-      setDropTarget(row?.dataset.dir ?? path)
+      if (!accepts(e)) return
+      const target = targetOf(e)
+      const drag = currentRemoteDrag()
+      // Dragging within this server only means something onto another folder (a move).
+      if (drag && drag.sessionId === sessionId) {
+        const pointless = drag.paths.some((p) => p === target) || drag.paths.every((p) => parentOf(p) === target)
+        if (pointless) {
+          e.dataTransfer.dropEffect = 'none'
+          setDropTarget(null)
+          return
+        }
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+      } else {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }
+      setDropTarget(target)
     },
     onDragLeave: () => {
       if (--dragDepth.current <= 0) {
@@ -256,13 +302,22 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
       }
     },
     onDrop: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return
+      if (!accepts(e) || !sessionId) return
       e.preventDefault()
       e.stopPropagation()
       const target = dropTarget ?? path
       dragDepth.current = 0
       setDropTarget(null)
-      upload(droppedPaths(e), target)
+      const drag = currentRemoteDrag()
+      if (!isRemoteDrag(e) || !drag) return upload(droppedPaths(e), target)
+      if (drag.sessionId === sessionId) {
+        api
+          .moveInto(sessionId, drag.paths, target)
+          .catch(fail)
+          .finally(() => void load(path, true))
+      } else {
+        copyWithConfirm(drag.sessionId, drag.paths, sessionId, target).catch(fail)
+      }
     }
   }
 
@@ -384,6 +439,9 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
               setMenu({ x: e.clientX, y: e.clientY, entry: item })
             }}
             data-dir={item.isDir ? item.path : undefined}
+            draggable
+            onDragStart={(e) => startRowDrag(e, item)}
+            onDragEnd={() => setRemoteDrag(null)}
             onMouseEnter={() => prefetch(item)}
             onMouseLeave={() => clearTimeout(hoverTimer.current)}
           >
@@ -398,7 +456,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
       </div>
 
       <div className="sftp-foot">
-        <Upload size={13} /> Drop files here or onto a folder to upload
+        <Upload size={13} /> Drop files here · drag rows to another server's tab
       </div>
 
       {menu && (
@@ -416,6 +474,17 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
               <button onClick={() => (setMenu(null), void navigator.clipboard.writeText(menu.entry!.path))}>
                 <Copy size={14} /> Copy path
               </button>
+              {peers.length > 0 && (
+                <>
+                  <hr />
+                  <div className="menu-label">Send to</div>
+                  {peers.map((peer) => (
+                    <button key={peer.sessionId} onClick={() => (setMenu(null), sendTo(peer, selection()))}>
+                      <Send size={14} /> {peer.title}
+                    </button>
+                  ))}
+                </>
+              )}
               <hr />
               <button className="danger-text" onClick={() => (setMenu(null), void remove(selection()))}>
                 <Trash2 size={14} /> Delete

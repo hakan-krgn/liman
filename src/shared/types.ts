@@ -55,12 +55,16 @@ export type ConflictMode = 'replace' | 'keepBoth'
 export interface Transfer {
   id: string
   sessionId: string
-  direction: 'up' | 'down'
+  /** up: local → server, down: server → local, copy: server → server. */
+  direction: 'up' | 'down' | 'copy'
   label: string
   target: string
   total: number
   done: number
   status: 'running' | 'done' | 'error' | 'cancelled'
+  /** For server-to-server copies: "user@host" of each side. */
+  sourceHost?: string
+  targetHost?: string
   error?: string
 }
 

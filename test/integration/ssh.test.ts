@@ -233,6 +233,58 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     expect(names).toEqual(['dröp zone', 'keep', 'newdir', 'renamed.txt'])
   })
 
+  it('copies files and folders between two sessions, byte for byte', async () => {
+    addHost('peer')
+    manager.connect('peer', 'peer', 80, 24)
+    expect(await waitFor('peer', (x) => x === 'connected')).toContain('connected')
+
+    const src = `${base}/relay-src`
+    await remote(
+      `mkdir -p ${src}/nested/deeper && cd ${src} && ` +
+        `head -c 5242881 /dev/urandom > big.bin && printf 'hi' > small.txt && : > empty && ` +
+        `printf '#!/bin/sh\\necho ok\\n' > run.sh && chmod 755 run.sh && ` +
+        `seq 1 50 | while read i; do printf "$i" > nested/f$i; done && printf deep > nested/deeper/x.txt && ` +
+        `printf 'ü' > 'nested/çiçek ğüş.txt' && ln -s .. nested/loop`
+    )
+    const sums = (dir: string): Promise<string> =>
+      remote(`cd ${dir} && find . -type f -exec md5sum {} + | sort -k 2`)
+
+    const dst = `${base}/relay-dst`
+    await remote(`mkdir -p ${dst}`)
+    expect(await manager.prepareCopy('peer', ['relay-src'], dst)).toEqual({ dir: dst, conflicts: [] })
+    await manager.copyBetween(SID, [src], 'peer', dst, 'replace')
+
+    expect(await sums(`${dst}/relay-src`)).toBe(await sums(src))
+    expect((await remote(`stat -c %a ${dst}/relay-src/run.sh`)).trim()).toBe('755')
+    expect((await remote(`test -e ${dst}/relay-src/nested/loop && echo yes || echo no`)).trim()).toBe('no')
+
+    // Same names again: keep both.
+    expect((await manager.prepareCopy('peer', ['relay-src'], dst)).conflicts).toEqual(['relay-src'])
+    await manager.copyBetween(SID, [`${src}/small.txt`], 'peer', `${dst}/relay-src`, 'keepBoth')
+    expect((await remote(`cat '${dst}/relay-src/small (1).txt'`)).trim()).toBe('hi')
+
+    // Defaults to the destination terminal's folder.
+    manager.write('peer', `cd ${dst}\n`)
+    await sleep(600)
+    expect((await manager.prepareCopy('peer', ['x'])).dir).toBe(dst)
+    manager.disconnect('peer')
+  })
+
+  it('moves entries into another folder on the same server', async () => {
+    const dir = `${base}/move`
+    await remote(`mkdir -p ${dir}/target ${dir}/a && printf 1 > ${dir}/one.txt`)
+    await manager.moveInto(SID, [`${dir}/one.txt`, `${dir}/a`], `${dir}/target`)
+    expect((await remote(`cd ${dir} && find . | sort`)).trim().split('\n')).toEqual([
+      '.',
+      './target',
+      './target/a',
+      './target/one.txt'
+    ])
+    await expect(manager.moveInto(SID, [`${dir}/target`], `${dir}/target/a`)).rejects.toThrow(/into itself/)
+    await remote(`printf 2 > ${dir}/one.txt`)
+    await expect(manager.moveInto(SID, [`${dir}/one.txt`], `${dir}/target`)).rejects.toThrow(/already exists/)
+  })
+
   it('applies a resize that happens while connecting', async () => {
     addHost('resize')
     manager.connect('resize', 'resize', 80, 24)

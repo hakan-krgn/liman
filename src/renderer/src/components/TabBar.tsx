@@ -5,6 +5,7 @@ import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable 
 import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
 import type { Tab } from '../App'
+import { REMOTE_DRAG } from '../lib'
 
 interface Props {
   tabs: Tab[]
@@ -158,7 +159,19 @@ interface TabProps {
   onMenu(x: number, y: number): void
 }
 
+/** Hovering a tab this long while dragging files opens it, so they can be dropped there. */
+const SPRING_DELAY = 500
+
 function SortableTab({ tab, active, editing, onActivate, onClose, onStartRename, onFinishRename, onMenu }: TabProps): React.JSX.Element {
+  const spring = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const [springing, setSpringing] = useState(false)
+  const isFileDrag = (e: React.DragEvent): boolean =>
+    e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(REMOTE_DRAG)
+  const stopSpring = (): void => {
+    clearTimeout(spring.current)
+    spring.current = undefined
+    setSpringing(false)
+  }
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: tab.id,
     disabled: editing
@@ -178,7 +191,7 @@ function SortableTab({ tab, active, editing, onActivate, onClose, onStartRename,
     <div
       ref={setNodeRef}
       data-tab={tab.id}
-      className={['tab', active && 'active', isDragging && 'lifted'].filter(Boolean).join(' ')}
+      className={['tab', active && 'active', isDragging && 'lifted', springing && 'springing'].filter(Boolean).join(' ')}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       title={tab.title}
       {...attributes}
@@ -195,6 +208,23 @@ function SortableTab({ tab, active, editing, onActivate, onClose, onStartRename,
         onClose()
       }}
       onDoubleClick={onStartRename}
+      onDragEnter={(e) => {
+        if (!isFileDrag(e) || active || spring.current) return
+        setSpringing(true)
+        spring.current = setTimeout(() => {
+          stopSpring()
+          onActivate()
+        }, SPRING_DELAY)
+      }}
+      onDragOver={(e) => isFileDrag(e) && e.preventDefault()}
+      onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && stopSpring()}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return
+        // Dropping on the tab itself just opens it; the files go where it's dropped next.
+        e.preventDefault()
+        stopSpring()
+        onActivate()
+      }}
       onContextMenu={(e) => {
         e.preventDefault()
         onMenu(e.clientX, e.clientY)

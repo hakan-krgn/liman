@@ -297,6 +297,9 @@ export function App(): React.JSX.Element {
               theme={theme}
               fontSize={settings.fontSize}
               onZoom={zoom}
+              peers={tabs
+                .filter((o) => o.id !== t.id && o.status === 'connected' && o.sessionId)
+                .map((o) => ({ sessionId: o.sessionId!, title: o.title }))}
               onSession={(sessionId) => patchTab(t.id, { sessionId })}
               onReconnect={() => reconnect(t.id)}
               onClose={() => closeTab(t.id)}

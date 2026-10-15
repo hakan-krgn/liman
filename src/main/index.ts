@@ -195,6 +195,13 @@ function registerIpc(): void {
     const target = await sessions.download(str(sessionId), strs(paths), app.getPath('downloads'))
     if (target) revealable.add(target)
   })
+  handle('sftp:prepareCopy', (sessionId, names, dir) =>
+    sessions.prepareCopy(str(sessionId), strs(names), dir === undefined ? undefined : str(dir))
+  )
+  handle('sftp:copyBetween', (fromId, paths, toId, dir, mode) =>
+    sessions.copyBetween(str(fromId), strs(paths), str(toId), str(dir), mode === 'keepBoth' ? 'keepBoth' : 'replace')
+  )
+  handle('sftp:moveInto', (sessionId, paths, dir) => sessions.moveInto(str(sessionId), strs(paths), str(dir)))
   on('transfer:cancel', (id) => sessions.cancelTransfer(str(id)))
 
   handle('dialog:pickKey', async () => {

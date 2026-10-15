@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowDown, ArrowUp, Check, X } from 'lucide-react'
+import { AlertCircle, ArrowDown, ArrowLeftRight, ArrowUp, Check, X } from 'lucide-react'
 import type { Transfer } from '@shared/types'
 import { api, formatBytes } from '../lib'
 
@@ -30,7 +30,8 @@ export function Transfers(): React.JSX.Element | null {
         const pct = t.total ? Math.min(100, (t.done / t.total) * 100) : t.status === 'done' ? 100 : 0
         const secs = (Date.now() - (started.current.get(t.id) ?? Date.now())) / 1000
         const speed = secs > 0.5 ? t.done / secs : 0
-        const Icon = t.direction === 'up' ? ArrowUp : ArrowDown
+        const Icon = t.direction === 'up' ? ArrowUp : t.direction === 'copy' ? ArrowLeftRight : ArrowDown
+        const route = t.direction === 'copy' ? `${t.sourceHost} → ${t.targetHost}:${t.target}` : t.target
         return (
           <div key={t.id} className={`transfer ${t.status}`}>
             <div className="transfer-icon">
@@ -44,7 +45,7 @@ export function Transfers(): React.JSX.Element | null {
               <div
                 className={`transfer-sub ${t.status === 'done' && t.direction === 'down' ? 'clickable' : ''}`}
                 onClick={() => t.status === 'done' && t.direction === 'down' && api.showItem(t.target)}
-                title={t.target}
+                title={route}
               >
                 {t.status === 'error'
                   ? t.error
@@ -53,8 +54,12 @@ export function Transfers(): React.JSX.Element | null {
                     : t.status === 'done'
                       ? t.direction === 'down'
                         ? 'Saved — show in folder'
-                        : `Uploaded to ${t.target}`
-                      : `${formatBytes(t.done)} of ${formatBytes(t.total)}${speed ? ` · ${formatBytes(speed)}/s` : ''}`}
+                        : t.direction === 'copy'
+                          ? `Copied to ${t.targetHost}:${t.target}`
+                          : `Uploaded to ${t.target}`
+                      : `${formatBytes(t.done)} of ${formatBytes(t.total)}${speed ? ` · ${formatBytes(speed)}/s` : ''}${
+                          t.direction === 'copy' ? ` · ${t.sourceHost} → ${t.targetHost}` : ''
+                        }`}
               </div>
               {t.status === 'running' && (
                 <div className="bar">

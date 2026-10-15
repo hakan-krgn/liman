@@ -6,8 +6,8 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Loader2, RotateCw, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
-import { api, droppedPaths, errorMessage, hasFiles, isMac, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
-import { SftpPanel } from './SftpPanel'
+import { api, copyWithConfirm, currentRemoteDrag, droppedPaths, errorMessage, hasFiles, isRemoteDrag, isMac, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
+import { SftpPanel, type Peer } from './SftpPanel'
 import { useAutoReconnect } from '../useAutoReconnect'
 
 interface Props {
@@ -21,11 +21,13 @@ interface Props {
   onToggleFiles(): void
   /** Font zoom request: +1 / -1. */
   onZoom(step: number): void
+  /** Other connected tabs, for "Send to…" in the files panel. */
+  peers: Peer[]
 }
 
 export const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace'
 
-export function TerminalView({ tab, active, theme, fontSize, onSession, onReconnect, onClose, onToggleFiles, onZoom }: Props): React.JSX.Element {
+export function TerminalView({ tab, active, theme, fontSize, onSession, onReconnect, onClose, onToggleFiles, onZoom, peers }: Props): React.JSX.Element {
   const hostEl = useRef<HTMLDivElement>(null)
   const term = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
@@ -33,7 +35,7 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
   const live = useRef({ status: tab.status, onReconnect, onZoom })
   live.current = { status: tab.status, onReconnect, onZoom }
 
-  const [drop, setDrop] = useState<{ dir?: string } | null>(null)
+  const [drop, setDrop] = useState<{ dir?: string; remote: boolean } | null>(null)
   const dragDepth = useRef(0)
 
   const { retry, stop: stopRetry, now: retryNow } = useAutoReconnect(tab, onReconnect, () =>
@@ -199,20 +201,27 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
   // -------------------------------------------------------------- drag & drop
   const connected = tab.status === 'connected'
 
+  /** Local files, or remote files dragged from another server's files panel. */
+  const accepts = (e: React.DragEvent): boolean => {
+    if (hasFiles(e)) return true
+    const drag = isRemoteDrag(e) ? currentRemoteDrag() : null
+    return !!drag && drag.sessionId !== sessionId.current
+  }
+
   const onDragEnter = (e: React.DragEvent): void => {
-    if (!hasFiles(e)) return
+    if (!accepts(e)) return
     e.preventDefault()
     if (++dragDepth.current > 1) return
-    setDrop({})
+    setDrop({ remote: isRemoteDrag(e) })
     if (connected) {
       api
         .getCwd(sessionId.current)
-        .then((dir) => setDrop((d) => (d ? { dir } : d)))
+        .then((dir) => setDrop((d) => (d ? { ...d, dir } : d)))
         .catch(() => {})
     }
   }
   const onDragOver = (e: React.DragEvent): void => {
-    if (!hasFiles(e)) return
+    if (!accepts(e)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = connected ? 'copy' : 'none'
   }
@@ -223,15 +232,19 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     }
   }
   const onDrop = (e: React.DragEvent): void => {
-    if (!hasFiles(e)) return
+    if (!accepts(e)) return
     e.preventDefault()
     const dir = drop?.dir
     dragDepth.current = 0
     setDrop(null)
     if (!connected) return
-    uploadWithConfirm(sessionId.current, droppedPaths(e), dir)
+    const drag = isRemoteDrag(e) ? currentRemoteDrag() : null
+    const work = drag
+      ? copyWithConfirm(drag.sessionId, drag.paths, sessionId.current, dir)
+      : uploadWithConfirm(sessionId.current, droppedPaths(e), dir)
+    work
       .catch((err) =>
-        showDialog({ title: 'Upload failed', message: errorMessage(err), buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }] })
+        showDialog({ title: drag ? 'Copy failed' : 'Upload failed', message: errorMessage(err), buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }] })
       )
       .finally(() => term.current?.focus())
   }
@@ -298,7 +311,7 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
               <Upload size={22} />
               {connected ? (
                 <>
-                  <strong>Drop to upload</strong>
+                  <strong>{drop.remote ? 'Drop to copy here' : 'Drop to upload'}</strong>
                   <code>{drop.dir ?? 'finding current folder…'}</code>
                 </>
               ) : (
@@ -310,7 +323,7 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
       </div>
 
       {tab.filesOpen && (
-        <SftpPanel sessionId={tab.sessionId} connected={connected} onClose={onToggleFiles} />
+        <SftpPanel sessionId={tab.sessionId} connected={connected} peers={peers} onClose={onToggleFiles} />
       )}
     </div>
   )

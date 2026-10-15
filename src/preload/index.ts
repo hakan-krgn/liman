@@ -58,6 +58,15 @@ const api = {
   download: (sessionId: string, paths: string[]): Promise<void> =>
     ipcRenderer.invoke('sftp:download', sessionId, paths),
   cancelTransfer: (id: string): void => ipcRenderer.send('transfer:cancel', id),
+  /** Target folder on `sessionId` (its terminal's folder when `dir` is omitted) and name clashes there. */
+  prepareCopy: (sessionId: string, names: string[], dir?: string): Promise<{ dir: string; conflicts: string[] }> =>
+    ipcRenderer.invoke('sftp:prepareCopy', sessionId, names, dir),
+  /** Server-to-server copy between two open sessions. */
+  copyBetween: (fromId: string, paths: string[], toId: string, dir: string, mode: ConflictMode): Promise<void> =>
+    ipcRenderer.invoke('sftp:copyBetween', fromId, paths, toId, dir, mode),
+  /** Moves entries into another folder on the same server. */
+  moveInto: (sessionId: string, paths: string[], dir: string): Promise<void> =>
+    ipcRenderer.invoke('sftp:moveInto', sessionId, paths, dir),
   onTransfer: (cb: (t: Transfer) => void) => on('transfer:update', cb),
 
   onPrompt: (cb: (id: string, req: PromptRequest) => void) => on('prompt:request', cb),

@@ -1,5 +1,5 @@
 import type { ITheme } from '@xterm/xterm'
-import type { RemoteEntry } from '@shared/types'
+import type { ConflictMode, RemoteEntry } from '@shared/types'
 import type { DragEvent, ReactNode } from 'react'
 
 export const api = window.api
@@ -142,27 +142,59 @@ export async function textDialog(title: string, value: string, okLabel = 'Save')
 
 // ------------------------------------------------------------------ uploads
 
+/** Asks what to do about name clashes; null when the user cancels. */
+async function askConflicts(prep: { dir: string; conflicts: string[] }): Promise<ConflictMode | null> {
+  if (!prep.conflicts.length) return 'replace'
+  const what = prep.conflicts.length === 1 ? `“${prep.conflicts[0]}” already exists` : `${prep.conflicts.length} items already exist`
+  const r = await showDialog({
+    title: 'Replace existing files?',
+    message: `${what} in ${prep.dir}.`,
+    buttons: [
+      { label: 'Cancel', value: 'cancel', variant: 'ghost' },
+      { label: 'Keep both', value: 'keepBoth', variant: 'primary' },
+      { label: 'Replace', value: 'replace', variant: 'danger' }
+    ]
+  })
+  return r.value === 'cancel' ? null : (r.value as ConflictMode)
+}
+
 /** Upload local paths into a remote directory, asking before anything gets overwritten. */
 export async function uploadWithConfirm(sessionId: string, paths: string[], dir?: string): Promise<void> {
   if (paths.length === 0) return
   const prep = await api.prepareUpload(sessionId, paths, dir)
-  let mode: 'replace' | 'keepBoth' = 'replace'
-  if (prep.conflicts.length) {
-    const what = prep.conflicts.length === 1 ? `“${prep.conflicts[0]}” already exists` : `${prep.conflicts.length} items already exist`
-    const r = await showDialog({
-      title: 'Replace existing files?',
-      message: `${what} in ${prep.dir}.`,
-      buttons: [
-        { label: 'Cancel', value: 'cancel', variant: 'ghost' },
-        { label: 'Keep both', value: 'keepBoth', variant: 'primary' },
-        { label: 'Replace', value: 'replace', variant: 'danger' }
-      ]
-    })
-    if (r.value === 'cancel') return
-    mode = r.value as typeof mode
-  }
-  await api.upload(sessionId, paths, prep.dir, mode)
+  const mode = await askConflicts(prep)
+  if (mode) await api.upload(sessionId, paths, prep.dir, mode)
 }
+
+/**
+ * Copy remote paths from one open session to another, into `dir` or the target
+ * terminal's current folder, asking before anything gets overwritten.
+ */
+export async function copyWithConfirm(fromId: string, paths: string[], toId: string, dir?: string): Promise<void> {
+  if (paths.length === 0) return
+  const names = paths.map((p) => p.replace(/\/+$/, '').split('/').pop() || p)
+  const prep = await api.prepareCopy(toId, names, dir)
+  const mode = await askConflicts(prep)
+  if (mode) await api.copyBetween(fromId, paths, toId, prep.dir, mode)
+}
+
+// --------------------------------------------------------- remote drags
+// Files dragged out of a files panel. Only the drag's type is visible while
+// hovering, so the payload is kept here.
+
+export const REMOTE_DRAG = 'application/x-liman-remote'
+export type RemoteDrag = { sessionId: string; paths: string[] }
+let remoteDrag: RemoteDrag | null = null
+
+export function setRemoteDrag(drag: RemoteDrag | null): void {
+  remoteDrag = drag
+}
+
+export function currentRemoteDrag(): RemoteDrag | null {
+  return remoteDrag
+}
+
+export const isRemoteDrag = (e: DragEvent): boolean => e.dataTransfer.types.includes(REMOTE_DRAG)
 
 export function droppedPaths(e: DragEvent): string[] {
   return Array.from(e.dataTransfer.files)
