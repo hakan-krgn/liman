@@ -71,6 +71,12 @@ export type PromptRequest =
     }
   | {
       kind: 'auth'
+      /**
+       * `server`: text chosen by the remote server (keyboard-interactive).
+       * `app`: a prompt Liman itself shows (password, key passphrase).
+       * The UI keeps the two visually distinct so a server can't impersonate the app.
+       */
+      source: 'server' | 'app'
       host: string
       title: string
       instructions?: string

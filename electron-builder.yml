@@ -8,6 +8,14 @@ files:
   - package.json
 asarUnpack:
   - "**/*.node"
+# Lock down the packaged binary so it can't be reused to run arbitrary code
+# (and decrypt saved passwords) via ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 win:
   target:
     - target: nsis

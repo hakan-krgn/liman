@@ -56,6 +56,8 @@ const api = {
 
   onPrompt: (cb: (id: string, req: PromptRequest) => void) => on('prompt:request', cb),
   respondPrompt: (id: string, res: PromptResponse): void => ipcRenderer.send('prompt:respond', id, res),
+  /** Main cancelled a prompt (its session went away); the dialog should close. */
+  onPromptCancel: (cb: (id: string) => void) => on('prompt:cancel', cb),
 
   pickKey: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickKey'),
   showItem: (path: string): void => ipcRenderer.send('shell:showItem', path),

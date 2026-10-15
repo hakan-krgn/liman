@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import type { Host, HostInput, SessionStatus, Settings } from '@shared/types'
-import { api, chrome, isMac, showDialog } from './lib'
+import { api, chrome, dismissDialog, isMac, showDialog } from './lib'
 import { Sidebar } from './components/Sidebar'
 import { HostForm } from './components/HostForm'
 import { TerminalView } from './components/TerminalView'
@@ -82,25 +82,33 @@ export function App(): React.JSX.Element {
                   { label: 'Cancel', value: 'no', variant: 'ghost' },
                   { label: 'Trust & connect', value: 'yes', variant: 'primary' }
                 ],
-            cancelValue: 'no'
+            cancelValue: 'no',
+            key: id
           })
           api.respondPrompt(id, r.value === 'yes')
         } else {
+          const fromServer = req.source === 'server'
           const r = await showDialog({
-            title: req.title,
-            message: [req.host, req.instructions].filter(Boolean).join('\n'),
+            // Server-supplied text is always framed as such, so a server can't
+            // dress its prompt up as Liman's own passphrase dialog.
+            title: fromServer ? `${req.host} asks` : req.title,
+            message: fromServer
+              ? ['Message from the server:', req.title, req.instructions].filter(Boolean).join('\n')
+              : req.instructions,
             input: req.prompts.map((p) => ({ value: '', placeholder: p.prompt.replace(/:\s*$/, ''), secret: !p.echo })),
             buttons: [
               { label: 'Cancel', value: 'cancel', variant: 'ghost' },
               { label: 'Continue', value: 'ok', variant: 'primary' }
             ],
-            cancelValue: 'cancel'
+            cancelValue: 'cancel',
+            key: id
           })
           api.respondPrompt(id, r.value === 'ok' ? r.inputs : null)
         }
       }),
     []
   )
+  useEffect(() => api.onPromptCancel(dismissDialog), [])
 
   const openHost = useCallback((host: Host) => {
     const id = crypto.randomUUID()
@@ -135,6 +143,8 @@ export function App(): React.JSX.Element {
   // -------------------------------------------------------------- shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // Tab shortcuts are off while a modal is open.
+      if (document.querySelector('.overlay')) return
       const mod = isMac ? e.metaKey : e.ctrlKey
       let handled = true
       if (e.ctrlKey && e.key === 'Tab') {

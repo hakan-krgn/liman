@@ -1,25 +1,46 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { store } from './store'
 import { SessionManager } from './ssh'
-import type { ConflictMode, HostInput, PromptRequest, PromptResponse, Settings } from '@shared/types'
+import type { ConflictMode, HostInput, PromptResponse, Settings } from '@shared/types'
+
+// Development-only switches; a packaged build ignores them so nobody can point
+// the app at another renderer or profile through the environment.
+const DEV_RENDERER_URL = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL
+const DEV_USER_DATA = app.isPackaged ? undefined : process.env.LIMAN_USER_DATA
+const APP_URL = DEV_RENDERER_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
 
 let win: BrowserWindow | null = null
-const pending = new Map<string, (res: PromptResponse) => void>()
+const pending = new Map<string, { sessionId: string; resolve: (res: PromptResponse) => void }>()
+/** Local paths of finished downloads; the only paths the renderer may reveal. */
+const revealable = new Set<string>()
+
+function resolvePrompts(filter: (sessionId: string) => boolean): void {
+  for (const [id, p] of pending) {
+    if (!filter(p.sessionId)) continue
+    pending.delete(id)
+    p.resolve(null)
+    if (win && !win.isDestroyed()) win.webContents.send('prompt:cancel', id)
+  }
+}
 
 const sessions = new SessionManager({
   send(channel, ...args) {
     if (win && !win.isDestroyed()) win.webContents.send(channel, ...args)
   },
-  ask(req: PromptRequest) {
+  ask(sessionId, req) {
     return new Promise((resolve) => {
       if (!win || win.isDestroyed()) return resolve(null)
       const id = randomUUID()
-      pending.set(id, resolve)
+      pending.set(id, { sessionId, resolve })
       win.webContents.send('prompt:request', id, req)
     })
+  },
+  cancelPrompts(sessionId) {
+    resolvePrompts((s) => s === sessionId)
   }
 })
 
@@ -46,7 +67,8 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      devTools: !app.isPackaged
     }
   })
 
@@ -57,61 +79,105 @@ function createWindow(): void {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
-  // A renderer reload loses every terminal, so drop the SSH sessions behind them too.
-  win.webContents.on('did-start-loading', () => sessions.disconnectAll())
+  // A renderer reload loses every terminal and dialog, so drop what was behind them.
+  win.webContents.on('did-start-loading', () => {
+    resolvePrompts(() => true)
+    sessions.disconnectAll()
+  })
   win.on('closed', () => {
-    for (const resolve of pending.values()) resolve(null)
-    pending.clear()
+    resolvePrompts(() => true)
     sessions.disconnectAll()
     win = null
   })
 
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  if (DEV_RENDERER_URL) void win.loadURL(DEV_RENDERER_URL)
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
+// ----------------------------------------------------------------------- IPC
+
+/** Only our own window's top-level page, loaded from our own URL, may call in. */
+function trusted(e: IpcMainEvent | IpcMainInvokeEvent): boolean {
+  const frame = e.senderFrame
+  return !!win && e.sender === win.webContents && frame === win.webContents.mainFrame && frame.url.startsWith(APP_URL)
+}
+
+function handle(channel: string, fn: (...args: unknown[]) => unknown): void {
+  ipcMain.handle(channel, (e, ...args) => {
+    if (!trusted(e)) throw new Error('Untrusted sender')
+    return fn(...args)
+  })
+}
+
+function on(channel: string, fn: (...args: unknown[]) => void): void {
+  ipcMain.on(channel, (e, ...args) => {
+    if (!trusted(e)) return
+    try {
+      fn(...args)
+    } catch (err) {
+      console.error(`[ipc] ${channel}:`, err)
+    }
+  })
+}
+
+function str(v: unknown): string {
+  if (typeof v !== 'string') throw new TypeError('Expected a string')
+  return v
+}
+function strs(v: unknown): string[] {
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) throw new TypeError('Expected a list of strings')
+  return v
+}
+function int(v: unknown): number {
+  if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 10_000) throw new TypeError('Expected a size')
+  return v as number
+}
+function color(v: unknown): string {
+  if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) throw new TypeError('Expected a hex colour')
+  return v
+}
+
 function registerIpc(): void {
-  ipcMain.handle('hosts:list', () => store.listHosts())
-  ipcMain.handle('hosts:save', (_e, input: HostInput) => store.saveHost(input))
-  ipcMain.handle('hosts:delete', (_e, id: string) => store.deleteHost(id))
+  handle('hosts:list', () => store.listHosts())
+  handle('hosts:save', (input) => store.saveHost(input as HostInput))
+  handle('hosts:delete', (id) => store.deleteHost(str(id)))
 
-  ipcMain.handle('settings:get', () => store.getSettings())
-  ipcMain.handle('settings:set', (_e, patch: Partial<Settings>) => store.setSettings(patch))
-  ipcMain.handle('window:titlebar', (_e, color: string, symbolColor: string) => {
-    if (process.platform !== 'darwin' && win) win.setTitleBarOverlay({ color, symbolColor })
+  handle('settings:get', () => store.getSettings())
+  handle('settings:set', (patch) => store.setSettings(patch as Partial<Settings>))
+  handle('window:titlebar', (bg, fg) => {
+    if (process.platform !== 'darwin' && win) win.setTitleBarOverlay({ color: color(bg), symbolColor: color(fg) })
   })
 
-  ipcMain.on('prompt:respond', (_e, id: string, res: PromptResponse) => {
-    pending.get(id)?.(res)
-    pending.delete(id)
+  on('prompt:respond', (id, res) => {
+    const p = pending.get(str(id))
+    if (!p) return
+    pending.delete(str(id))
+    p.resolve(res === true || (Array.isArray(res) && res.every((x) => typeof x === 'string')) ? (res as PromptResponse) : null)
   })
 
-  ipcMain.on('ssh:connect', (_e, sessionId: string, hostId: string, cols: number, rows: number) =>
-    sessions.connect(sessionId, hostId, cols, rows)
-  )
-  ipcMain.on('ssh:write', (_e, sessionId: string, data: string) => sessions.write(sessionId, data))
-  ipcMain.on('ssh:resize', (_e, sessionId: string, cols: number, rows: number) =>
-    sessions.resize(sessionId, cols, rows)
-  )
-  ipcMain.on('ssh:disconnect', (_e, sessionId: string) => sessions.disconnect(sessionId))
-  ipcMain.handle('ssh:cwd', (_e, sessionId: string) => sessions.getCwd(sessionId))
+  on('ssh:connect', (sessionId, hostId, cols, rows) => sessions.connect(str(sessionId), str(hostId), int(cols), int(rows)))
+  on('ssh:write', (sessionId, data) => sessions.write(str(sessionId), str(data)))
+  on('ssh:resize', (sessionId, cols, rows) => sessions.resize(str(sessionId), int(cols), int(rows)))
+  on('ssh:disconnect', (sessionId) => sessions.disconnect(str(sessionId)))
+  handle('ssh:cwd', (sessionId) => sessions.getCwd(str(sessionId)))
 
-  ipcMain.handle('sftp:list', (_e, sessionId: string, dir: string) => sessions.list(sessionId, dir))
-  ipcMain.handle('sftp:mkdir', (_e, sessionId: string, path: string) => sessions.mkdir(sessionId, path))
-  ipcMain.handle('sftp:rename', (_e, sessionId: string, from: string, to: string) =>
-    sessions.rename(sessionId, from, to)
+  handle('sftp:list', (sessionId, dir) => sessions.list(str(sessionId), str(dir)))
+  handle('sftp:mkdir', (sessionId, path) => sessions.mkdir(str(sessionId), str(path)))
+  handle('sftp:rename', (sessionId, from, to) => sessions.rename(str(sessionId), str(from), str(to)))
+  handle('sftp:remove', (sessionId, paths) => sessions.remove(str(sessionId), strs(paths)))
+  handle('sftp:prepareUpload', (sessionId, paths, dir) =>
+    sessions.prepareUpload(str(sessionId), strs(paths), dir === undefined ? undefined : str(dir))
   )
-  ipcMain.handle('sftp:remove', (_e, sessionId: string, paths: string[]) => sessions.remove(sessionId, paths))
-  ipcMain.handle('sftp:prepareUpload', (_e, sessionId: string, paths: string[], dir?: string) =>
-    sessions.prepareUpload(sessionId, paths, dir)
+  handle('sftp:upload', (sessionId, paths, dir, mode) =>
+    sessions.upload(str(sessionId), strs(paths), str(dir), mode === 'keepBoth' ? 'keepBoth' : ('replace' satisfies ConflictMode))
   )
-  ipcMain.handle('sftp:upload', (_e, sessionId: string, paths: string[], dir: string, mode: ConflictMode) =>
-    sessions.upload(sessionId, paths, dir, mode)
-  )
-  ipcMain.handle('sftp:download', (_e, sessionId: string, paths: string[]) => sessions.download(sessionId, paths))
-  ipcMain.on('transfer:cancel', (_e, id: string) => sessions.cancelTransfer(id))
+  handle('sftp:download', async (sessionId, paths) => {
+    const target = await sessions.download(str(sessionId), strs(paths), app.getPath('downloads'))
+    if (target) revealable.add(target)
+  })
+  on('transfer:cancel', (id) => sessions.cancelTransfer(str(id)))
 
-  ipcMain.handle('dialog:pickKey', async () => {
+  handle('dialog:pickKey', async () => {
     const res = await dialog.showOpenDialog(win!, {
       title: 'Choose private key',
       defaultPath: join(homedir(), '.ssh'),
@@ -119,7 +185,9 @@ function registerIpc(): void {
     })
     return res.canceled ? null : res.filePaths[0]
   })
-  ipcMain.on('shell:showItem', (_e, path: string) => shell.showItemInFolder(path))
+  on('shell:showItem', (path) => {
+    if (revealable.has(str(path))) shell.showItemInFolder(str(path))
+  })
 }
 
 /**
@@ -148,11 +216,24 @@ function setupMenu(): void {
   )
 }
 
+/** The UI only needs the clipboard; every other permission request is refused. */
+function setupPermissions(): void {
+  const allowed = new Set(['clipboard-read', 'clipboard-sanitized-write'])
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)))
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission))
+}
+
 app.setName('Liman')
 // Lets development and tests run against a throwaway profile.
-if (process.env.LIMAN_USER_DATA) app.setPath('userData', process.env.LIMAN_USER_DATA)
+if (DEV_USER_DATA) app.setPath('userData', DEV_USER_DATA)
+
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-attach-webview', (e) => e.preventDefault())
+})
+
 app.whenReady().then(() => {
   setupMenu()
+  setupPermissions()
   registerIpc()
   createWindow()
   app.on('activate', () => {

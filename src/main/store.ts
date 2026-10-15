@@ -28,12 +28,20 @@ let file: string
 function load(): StoreData {
   if (data) return data
   const dir = app.getPath('userData')
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
   file = join(dir, 'liman.json')
   try {
     const raw = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
     data = { ...defaults, ...raw, settings: { ...defaults.settings, ...raw.settings } }
-  } catch {
+  } catch (err) {
+    // Never silently overwrite a file we couldn't read: keep it next to the fresh one.
+    const backup = `${file}.corrupt-${Date.now()}`
+    try {
+      renameSync(file, backup)
+    } catch {
+      /* nothing to keep */
+    }
+    console.error(`[store] could not read ${file}, moved it to ${backup}:`, err)
     data = structuredClone(defaults)
   }
   return data
@@ -46,7 +54,9 @@ function save(): void {
 }
 
 function encrypt(value: string): string {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage is not available on this system')
+  // On Linux without a keyring Electron falls back to a hard-coded key; treat that as unavailable.
+  const plainText = process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
+  if (!safeStorage.isEncryptionAvailable() || plainText) throw new Error('Secure storage is not available on this system')
   return safeStorage.encryptString(value).toString('base64')
 }
 
@@ -71,18 +81,32 @@ export const store = {
   saveHost(input: HostInput): Host {
     const d = load()
     const existing = input.id ? d.hosts.find((h) => h.id === input.id) : undefined
-    const { password, passphrase, clearPassword, ...rest } = input
+    const host = String(input.host ?? '').trim()
+    const username = String(input.username ?? '').trim()
+    const port = Number(input.port)
+    if (!host) throw new Error('Address is required')
+    if (!username) throw new Error('Username is required')
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be between 1 and 65535')
+    if (!['password', 'key', 'agent'].includes(input.authType)) throw new Error('Unknown authentication type')
+
+    // Only known fields are stored, whatever else the renderer sends.
     const next: StoredHost = {
-      ...rest,
       id: existing?.id ?? randomUUID(),
-      name: rest.name.trim() || rest.host,
-      port: Number(rest.port) || 22,
+      name: String(input.name ?? '').trim() || host,
+      host,
+      port,
+      username,
+      authType: input.authType,
+      keyPath: input.keyPath ? String(input.keyPath) : undefined,
+      group: input.group ? String(input.group).trim() : undefined,
       password: existing?.password,
       passphrase: existing?.passphrase
     }
-    if (password) next.password = encrypt(password)
-    if (clearPassword || input.authType !== 'password') delete next.password
-    if (passphrase) next.passphrase = encrypt(passphrase)
+    // A saved password belongs to one server account: moving the host elsewhere drops it.
+    const moved = existing && (existing.host !== host || existing.port !== port || existing.username !== username)
+    if (moved || input.clearPassword || input.authType !== 'password') delete next.password
+    if (input.password && input.authType === 'password') next.password = encrypt(input.password)
+    if (input.passphrase) next.passphrase = encrypt(input.passphrase)
     if (input.authType !== 'key') {
       delete next.passphrase
       delete next.keyPath

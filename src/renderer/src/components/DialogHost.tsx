@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { subscribeDialogs, type DialogSpec, type DialogResult } from '../lib'
 
 type Open = DialogSpec & { id: number; resolve: (r: DialogResult) => void }
@@ -6,9 +6,11 @@ type Open = DialogSpec & { id: number; resolve: (r: DialogResult) => void }
 export function DialogHost(): React.JSX.Element | null {
   const [dialogs, setDialogs] = useState<Open[]>([])
   useEffect(() => subscribeDialogs(setDialogs), [])
-  const top = dialogs[dialogs.length - 1]
-  if (!top) return null
-  return <Dialog key={top.id} d={top} />
+  // Oldest first: a dialog arriving later waits its turn instead of replacing the
+  // one being answered (and stealing the Enter key meant for it).
+  const current = dialogs[0]
+  if (!current) return null
+  return <Dialog key={current.id} d={current} />
 }
 
 function Dialog({ d }: { d: Open }): React.JSX.Element {
@@ -16,6 +18,11 @@ function Dialog({ d }: { d: Open }): React.JSX.Element {
   const primary = [...d.buttons].reverse().find((b) => b.variant === 'primary') ?? d.buttons[d.buttons.length - 1]
   const cancel = d.cancelValue ?? d.buttons.find((b) => b.variant === 'ghost')?.value ?? primary.value
   const done = (value: string): void => d.resolve({ value, inputs })
+
+  // Give focus back to whatever had it (usually the terminal) once answered. Read
+  // during render, because autoFocus moves focus before any effect runs.
+  const [previous] = useState(() => document.activeElement as HTMLElement | null)
+  useLayoutEffect(() => () => previous?.focus?.(), [previous])
 
   return (
     <div className="overlay dialog-overlay" onMouseDown={(e) => e.target === e.currentTarget && done(cancel)}>

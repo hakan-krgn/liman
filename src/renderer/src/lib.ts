@@ -31,10 +31,11 @@ export function cachedListing(sessionId: string, path: string): Listing | undefi
   return listings.get(listingKey(sessionId, path))
 }
 
-export function fetchListing(sessionId: string, dir: string): Promise<Listing> {
+/** Loads a folder; `fresh` skips joining a request that started before a change. */
+export function fetchListing(sessionId: string, dir: string, fresh = false): Promise<Listing> {
   const key = listingKey(sessionId, dir)
   const pending = inflight.get(key)
-  if (pending) return pending
+  if (pending && !fresh) return pending
   const p = api
     .list(sessionId, dir)
     .then((res) => {
@@ -45,7 +46,9 @@ export function fetchListing(sessionId: string, dir: string): Promise<Listing> {
       while (listings.size > MAX_LISTINGS) listings.delete(listings.keys().next().value!)
       return res
     })
-    .finally(() => inflight.delete(key))
+    .finally(() => {
+      if (inflight.get(key) === p) inflight.delete(key)
+    })
   inflight.set(key, p)
   return p
 }
@@ -69,6 +72,8 @@ export interface DialogSpec {
   input?: { value: string; placeholder?: string; secret?: boolean }[]
   /** Value returned when the dialog is dismissed with Escape. */
   cancelValue?: string
+  /** Lets `dismissDialog` close it from outside (e.g. its session ended). */
+  key?: string
 }
 
 export interface DialogResult {
@@ -96,6 +101,12 @@ export function showDialog(spec: DialogSpec): Promise<DialogResult> {
     dialogs = [...dialogs, d]
     dialogListeners.forEach((l) => l(dialogs))
   })
+}
+
+/** Closes a dialog opened with `key` as if it were cancelled. */
+export function dismissDialog(key: string): void {
+  const d = dialogs.find((x) => x.key === key)
+  if (d) d.resolve({ value: d.cancelValue ?? 'cancel', inputs: [] })
 }
 
 export function subscribeDialogs(cb: (d: OpenDialog[]) => void): () => void {

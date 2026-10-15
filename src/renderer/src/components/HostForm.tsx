@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { FolderSearch, X } from 'lucide-react'
 import type { AuthType, Host, HostInput } from '@shared/types'
-import { api, confirmDialog } from '../lib'
+import { api, confirmDialog, errorMessage } from '../lib'
 import { parseTarget } from './Sidebar'
 
 interface Props {
@@ -34,22 +34,28 @@ export function HostForm({ host, prefill, onClose, onSaved, onDeleted }: Props):
   const [error, setError] = useState('')
   const set = <K extends keyof HostInput>(k: K, v: HostInput[K]): void => setF((x) => ({ ...x, [k]: v }))
 
-  // Pasting "user@host:port" into the address field fills all three.
-  const onHostBlur = (): void => {
-    const t = parseTarget(f.host)
-    if (t && (t.username || t.port !== 22)) {
-      setF((x) => ({ ...x, host: t.host!, username: t.username || x.username, port: t.port ?? x.port }))
-    }
+  /** Splits "user@host:port" typed into the address field into all three fields. */
+  const normalized = (x: HostInput): HostInput => {
+    const t = parseTarget(x.host)
+    if (!t || !(t.username || /:\d+$/.test(x.host.trim()))) return x
+    return { ...x, host: t.host!, username: t.username || x.username, port: t.port ?? x.port }
   }
 
+  // The saved password is tied to address, port and user; changing any of them drops it.
+  const moved = !!host && (f.host.trim() !== host.host || Number(f.port) !== host.port || f.username.trim() !== host.username)
+
   const submit = async (connect: boolean): Promise<void> => {
-    if (!f.host.trim()) return setError('Address is required')
-    if (!f.username.trim()) return setError('Username is required')
+    const v = normalized(f)
+    setF(v)
+    if (!v.host.trim()) return setError('Address is required')
+    if (!v.username.trim()) return setError('Username is required')
+    const port = Number(v.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return setError('Port must be between 1 and 65535')
     try {
-      const saved = await api.saveHost({ ...f, host: f.host.trim(), username: f.username.trim() })
+      const saved = await api.saveHost({ ...v, port, host: v.host.trim(), username: v.username.trim() })
       onSaved(saved, connect)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errorMessage(e))
     }
   }
 
@@ -84,7 +90,7 @@ export function HostForm({ host, prefill, onClose, onSaved, onDeleted }: Props):
               autoFocus
               value={f.host}
               onChange={(e) => set('host', e.target.value)}
-              onBlur={onHostBlur}
+              onBlur={() => setF(normalized)}
               placeholder="192.168.1.10 or user@example.com"
               spellCheck={false}
             />
@@ -123,7 +129,13 @@ export function HostForm({ host, prefill, onClose, onSaved, onDeleted }: Props):
               type="password"
               value={f.password}
               onChange={(e) => set('password', e.target.value)}
-              placeholder={host?.hasPassword ? '•••••••• (saved — leave empty to keep)' : 'Ask every time if empty'}
+              placeholder={
+                host?.hasPassword && !moved
+                  ? '•••••••• (saved — leave empty to keep)'
+                  : host?.hasPassword
+                    ? 'Address changed — enter the password again'
+                    : 'Ask every time if empty'
+              }
             />
           </label>
         )}

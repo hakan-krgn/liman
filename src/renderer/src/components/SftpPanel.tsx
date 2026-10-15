@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowUp,
   Copy,
@@ -56,6 +56,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
   const [width, setWidth] = useState(400)
   const dragDepth = useRef(0)
   const crumbsEl = useRef<HTMLDivElement>(null)
+  const menuEl = useRef<HTMLDivElement>(null)
   const pathRef = useRef(path)
   pathRef.current = path
   const loadSeq = useRef(0)
@@ -80,6 +81,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
     } else {
       const still = new Set(res.entries.map((e) => e.path))
       setSelected((sel) => new Set([...sel].filter((p) => still.has(p))))
+      setAnchor((a) => (a && still.has(a) ? a : null))
     }
   }, [])
 
@@ -93,10 +95,15 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
       if (cached) show(cached)
       setLoading(true)
       try {
-        const res = await fetchListing(sessionId, dir)
+        const res = await fetchListing(sessionId, dir, fresh)
         if (seq === loadSeq.current) show(res)
       } catch (e) {
-        if (seq === loadSeq.current && !cached) setError(errorMessage(e))
+        // The folder may be gone; don't leave a stale cached copy on screen.
+        invalidateListing(sessionId, dir)
+        if (seq === loadSeq.current) {
+          setEntries([])
+          setError(errorMessage(e))
+        }
       } finally {
         if (seq === loadSeq.current) setLoading(false)
       }
@@ -278,6 +285,15 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
 
   const crumbs = path === '/' ? [''] : path.split('/')
 
+  // Keep the context menu inside the window (the panel sits at the right edge).
+  useLayoutEffect(() => {
+    const el = menuEl.current
+    if (!menu || !el) return
+    const r = el.getBoundingClientRect()
+    el.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - r.width - 8))}px`
+    el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - r.height - 8))}px`
+  }, [menu])
+
   // Long paths: keep the deepest folder in view.
   useEffect(() => {
     if (crumbsEl.current) crumbsEl.current.scrollLeft = crumbsEl.current.scrollWidth
@@ -386,7 +402,7 @@ export function SftpPanel({ sessionId, connected, onClose }: Props): React.JSX.E
       </div>
 
       {menu && (
-        <div className="menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="menu" ref={menuEl} style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
           {menu.entry ? (
             <>
               <button onClick={() => (setMenu(null), download(selection()))}>
