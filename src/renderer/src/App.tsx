@@ -8,6 +8,7 @@ import { TerminalView } from './components/TerminalView'
 import { DialogHost } from './components/DialogHost'
 import { Transfers } from './components/Transfers'
 import { Logo } from './components/Logo'
+import { TabBar } from './components/TabBar'
 
 export interface Tab {
   id: string
@@ -133,12 +134,15 @@ export function App(): React.JSX.Element {
   )
   useEffect(() => api.onPromptCancel(dismissDialog), [])
 
-  const openHost = useCallback((host: Host) => {
+  /** Opens a new session tab, at the end or right after `afterId`. */
+  const openHost = useCallback((host: Host, afterId?: string) => {
     const id = crypto.randomUUID()
     setTabs((ts) => {
       const same = ts.filter((t) => t.hostId === host.id).length
       const title = same ? `${host.name} (${same + 1})` : host.name
-      return [...ts, { id, hostId: host.id, title, status: 'connecting', attempt: 0, filesOpen: false }]
+      const tab: Tab = { id, hostId: host.id, title, status: 'connecting', attempt: 0, filesOpen: false }
+      const at = afterId ? ts.findIndex((t) => t.id === afterId) + 1 : 0
+      return at > 0 ? [...ts.slice(0, at), tab, ...ts.slice(at)] : [...ts, tab]
     })
     setActiveId(id)
   }, [])
@@ -157,6 +161,33 @@ export function App(): React.JSX.Element {
       return next
     })
   }, [])
+
+  const closeOtherTabs = useCallback((keepId: string) => {
+    setTabs((ts) => {
+      for (const t of ts) if (t.id !== keepId && t.sessionId) api.disconnect(t.sessionId)
+      return ts.filter((t) => t.id === keepId)
+    })
+    setActiveId(keepId)
+  }, [])
+
+  const moveTab = useCallback((id: string, targetId: string, after: boolean) => {
+    setTabs((ts) => {
+      const moving = ts.find((t) => t.id === id)
+      if (!moving) return ts
+      const rest = ts.filter((t) => t.id !== id)
+      const at = rest.findIndex((t) => t.id === targetId) + (after ? 1 : 0)
+      return [...rest.slice(0, at), moving, ...rest.slice(at)]
+    })
+  }, [])
+
+  const duplicateTab = useCallback(
+    (id: string) => {
+      const tab = tabs.find((t) => t.id === id)
+      const host = tab && hosts.find((h) => h.id === tab.hostId)
+      if (host) openHost(host, id)
+    },
+    [tabs, hosts, openHost]
+  )
 
   const reconnect = useCallback(
     (id: string) => setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, status: 'connecting', message: undefined, attempt: t.attempt + 1 } : t))),
@@ -224,28 +255,16 @@ export function App(): React.JSX.Element {
 
       <main className="main">
         <header className="tabbar">
-          <div className="tabs">
-            {tabs.map((t) => (
-              <div
-                key={t.id}
-                className={`tab ${t.id === activeId ? 'active' : ''}`}
-                onMouseDown={(e) => e.button === 0 && setActiveId(t.id)}
-                onAuxClick={(e) => e.button === 1 && closeTab(t.id)}
-                title={t.title}
-              >
-                <span className={`status-dot ${t.status}`} />
-                <span className="tab-title">{t.title}</span>
-                <button
-                  className="tab-close"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={() => closeTab(t.id)}
-                  aria-label="Close tab"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-            ))}
-          </div>
+          <TabBar
+            tabs={tabs}
+            activeId={activeId}
+            onActivate={setActiveId}
+            onClose={closeTab}
+            onCloseOthers={closeOtherTabs}
+            onRename={(id, title) => patchTab(id, { title })}
+            onDuplicate={duplicateTab}
+            onMove={moveTab}
+          />
           <div className="tabbar-actions">
             {active && (
               <button

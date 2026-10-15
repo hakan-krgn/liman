@@ -152,6 +152,15 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     expect(prep).toEqual({ dir: `${base}/dröp zone`, conflicts: [] })
     await manager.upload(SID, [src], prep.dir, 'replace')
 
+    // Bulk data went over a second connection, not the terminal's.
+    const internals = manager as unknown as {
+      sessions: Map<string, { client: Client; transferConn?: Promise<Client | null> }>
+    }
+    const session = internals.sessions.get(SID)!
+    const transferClient = await session.transferConn
+    expect(transferClient).toBeInstanceOf(Client)
+    expect(transferClient).not.toBe(session.client)
+
     const tree = (await remote(`cd "${prep.dir}" && find . | sort`)).trim().split('\n')
     expect(tree).toEqual(['.', './project', './project/assets', './project/assets/big.bin', './project/index.html'])
     expect((await manager.prepareUpload(SID, [src])).conflicts).toEqual(['project'])

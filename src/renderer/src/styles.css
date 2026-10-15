@@ -528,6 +528,7 @@ code {
 }
 .tab {
   -webkit-app-region: no-drag;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -540,6 +541,31 @@ code {
   cursor: default;
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
+}
+/* Where a dragged tab will land. */
+.tab.drop-before::before,
+.tab.drop-after::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.tab.drop-before::before {
+  left: -3px;
+}
+.tab.drop-after::after {
+  right: -3px;
+}
+.tab-rename {
+  width: 130px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 13px;
 }
 .tab:hover {
   background: var(--hover);
@@ -951,8 +977,12 @@ code {
   text-align: left;
   cursor: pointer;
 }
-.menu button:hover {
+.menu button:hover:not(:disabled) {
   background: var(--hover);
+}
+.menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .menu hr {
   border: 0;

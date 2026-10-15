@@ -43,6 +43,22 @@ interface Session {
   closed: boolean
   /** The connection is going away (user disconnect or socket ended); open nothing new. */
   ending: boolean
+  /** How this session logged in, so a second connection for transfers can do the same. */
+  login?: LoginInfo
+  /** Separate connection for file transfers (null: unavailable, use the main one). */
+  transferConn?: Promise<Client | null>
+  transferUnavailable?: boolean
+  activeTransfers: number
+  transferIdle?: NodeJS.Timeout
+}
+
+interface LoginInfo {
+  host: string
+  port: number
+  username: string
+  hostKey: string
+  method: AnyAuthMethod
+  kbdAnswers?: string[]
 }
 
 interface ActiveTransfer extends Transfer {
@@ -51,10 +67,17 @@ interface ActiveTransfer extends Transfer {
 }
 
 const CONNECT_TIMEOUT = 20_000
+/** The transfer connection is closed after this long without transfers. */
+const TRANSFER_IDLE = 120_000
 /** How long the bootstrap may take to report its PID before we stop waiting for it. */
 const BOOTSTRAP_TIMEOUT = 2_000
 /** Files transferred at the same time within one upload/download. */
 const PARALLEL = 8
+/**
+ * 32 KB SFTP requests kept in flight per file. More only fills network queues
+ * (and delays terminal echo during downloads) without going faster on most links.
+ */
+const CHUNKS_IN_FLIGHT = 16
 
 const S_IFMT = 0o170000
 const S_IFDIR = 0o040000
@@ -99,6 +122,11 @@ interface ConnectState {
   ready: boolean
   /** The user accepted a host key that differs from the saved one. */
   keyChanged: boolean
+  /** The host key this connection was verified with. */
+  hostKey?: string
+  /** The last auth method offered, i.e. the one that succeeded once 'ready' fires. */
+  lastMethod?: AnyAuthMethod
+  kbdAnswers?: string[]
 }
 
 export class SessionManager {
@@ -125,6 +153,7 @@ export class SessionManager {
       scan: '',
       closed: false,
       ending: false,
+      activeTransfers: 0,
       helperQueue: Promise.resolve()
     }
     this.sessions.set(sessionId, session)
@@ -158,6 +187,16 @@ export class SessionManager {
     client.on('ready', () => {
       clearTimeout(timer)
       state.ready = true
+      if (state.hostKey && state.lastMethod) {
+        session.login = {
+          host: host.host,
+          port: host.port,
+          username: host.username,
+          hostKey: state.hostKey,
+          method: state.lastMethod,
+          kbdAnswers: state.kbdAnswers
+        }
+      }
       // Send keystrokes immediately instead of letting Nagle batch them.
       client.setNoDelay(true)
       this.openShell(session, fail)
@@ -174,6 +213,8 @@ export class SessionManager {
       session.ending = true
       session.closed = true
       this.sessions.delete(sessionId)
+      clearTimeout(session.transferIdle)
+      void session.transferConn?.then((c) => c?.end())
       this.bridge.cancelPrompts(sessionId)
       if (!state.ready) this.status({ sessionId, status: 'error', message: state.fatal ?? 'Connection closed' })
       else this.status({ sessionId, status: 'closed', message: state.fatal && `Connection lost: ${state.fatal}` })
@@ -190,14 +231,17 @@ export class SessionManager {
         keepaliveCountMax: 4,
         tryKeyboard: true,
         hostVerifier: (key: Buffer, verify: (ok: boolean) => void) => {
-          const fingerprint = 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '')
-          const keyType = key.subarray(4, 4 + key.readUInt32BE(0)).toString()
-          const value = `${keyType} ${fingerprint}`
+          const value = hostKeyId(key)
+          const [keyType, fingerprint] = value.split(' ')
           const known = store.getKnownHost(hostLabel)
-          if (known === value) return verify(true)
+          if (known === value) {
+            state.hostKey = value
+            return verify(true)
+          }
           ask({ kind: 'hostkey', host: hostLabel, fingerprint, keyType, previous: known }).then((ok) => {
             if (ok === true) {
               store.setKnownHost(hostLabel, value)
+              state.hostKey = value
               state.keyChanged = !!known
             } else {
               fail('Host key was not accepted')
@@ -236,6 +280,7 @@ export class SessionManager {
       const pw = savedPassword()
       if (pw && !savedPasswordUsedForKbd && prompts.length === 1 && !prompts[0].echo && /password/i.test(prompts[0].prompt)) {
         savedPasswordUsedForKbd = true
+        state.kbdAnswers = [pw]
         return finish([pw])
       }
       ask({
@@ -247,6 +292,7 @@ export class SessionManager {
         prompts: prompts.map((p) => ({ prompt: p.prompt, echo: !!p.echo }))
       }).then((answers) => {
         if (!Array.isArray(answers)) cancelled = true
+        else state.kbdAnswers = answers
         finish(Array.isArray(answers) ? answers : [])
       })
     }
@@ -327,7 +373,10 @@ export class SessionManager {
             fail('Authentication cancelled')
             return next(giveUp)
           }
-          if (method) return next(method)
+          if (method) {
+            state.lastMethod = method
+            return next(method)
+          }
         }
         if (cancelled) fail('Authentication cancelled')
         next(giveUp)
@@ -767,8 +816,11 @@ export class SessionManager {
   ): Promise<boolean> {
     const t = this.startTransfer(s.id, direction, label, target, files.reduce((n, f) => n + f.size, 0))
     let sftp: SFTPWrapper | undefined
+    s.activeTransfers++
+    clearTimeout(s.transferIdle)
     try {
-      sftp = await openSftp(s.client)
+      // A separate connection keeps bulk data from queueing in front of keystrokes.
+      sftp = await openSftp((await this.transferClient(s)) ?? s.client)
       t.sftp = sftp
       await prepare(sftp)
       let finished = 0
@@ -787,7 +839,9 @@ export class SessionManager {
           report()
         }
         await promisify<void>((cb) =>
-          direction === 'up' ? sftp!.fastPut(f.from, f.to, { step }, cb) : sftp!.fastGet(f.from, f.to, { step }, cb)
+          direction === 'up'
+            ? sftp!.fastPut(f.from, f.to, { step, concurrency: CHUNKS_IN_FLIGHT }, cb)
+            : sftp!.fastGet(f.from, f.to, { step, concurrency: CHUNKS_IN_FLIGHT }, cb)
         )
         await afterFile?.(f.to)
         inFlight.delete(f)
@@ -799,8 +853,82 @@ export class SessionManager {
       this.finish(t, err as Error)
     } finally {
       sftp?.end()
+      if (--s.activeTransfers === 0) {
+        s.transferIdle = setTimeout(() => {
+          const conn = s.transferConn
+          s.transferConn = undefined
+          void conn?.then((c) => c?.end())
+        }, TRANSFER_IDLE)
+      }
     }
     return t.status === 'done'
+  }
+
+  /**
+   * A second SSH connection to the same host for file transfers, logged in the
+   * way the terminal session was (same verified host key, same credentials).
+   * Resolves null when that isn't possible, e.g. a one-time 2FA code.
+   */
+  private transferClient(s: Session): Promise<Client | null> {
+    const login = s.login
+    if (!login || s.transferUnavailable || s.ending) return Promise.resolve(null)
+    if (s.transferConn) return s.transferConn
+
+    const conn = new Promise<Client | null>((resolve) => {
+      const c = new Client()
+      let settled = false
+      const settle = (ok: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (!ok) {
+          s.transferUnavailable = true
+          c.end()
+        }
+        resolve(ok ? c : null)
+      }
+      const timer = setTimeout(() => settle(false), CONNECT_TIMEOUT)
+      c.on('ready', () => {
+        c.setNoDelay(true)
+        settle(true)
+      })
+      c.on('error', (err) => {
+        if (!settled) console.warn('[transfer] falling back to the terminal connection:', err.message)
+        settle(false)
+      })
+      c.on('close', () => {
+        if (s.transferConn === conn) s.transferConn = undefined
+        settle(false)
+      })
+
+      let method: AnyAuthMethod = login.method
+      if (method.type === 'keyboard-interactive') {
+        const answers = login.kbdAnswers ?? []
+        method = { ...method, prompt: (_n, _i, _l, prompts, finish) => finish(prompts.length === answers.length ? answers : []) }
+      }
+      let offered = false
+      try {
+        c.connect({
+          host: login.host,
+          port: login.port,
+          username: login.username,
+          readyTimeout: 0,
+          keepaliveInterval: 15_000,
+          keepaliveCountMax: 4,
+          // Never talk to a different server than the one the user verified.
+          hostVerifier: (key: Buffer) => hostKeyId(key) === login.hostKey,
+          authHandler: (_left: unknown, _partial: unknown, next: NextAuthHandler) => {
+            if (offered) return next(false as unknown as AnyAuthMethod)
+            offered = true
+            next(method)
+          }
+        })
+      } catch {
+        settle(false)
+      }
+    })
+    s.transferConn = conn
+    return conn
   }
 
   cancelTransfer(id: string): void {
@@ -867,6 +995,13 @@ async function markFromInternet(path: string): Promise<void> {
 
 function promisify<T>(fn: (cb: (err: Error | null | undefined, res: T) => void) => void): Promise<T> {
   return new Promise((resolve, reject) => fn((err, res) => (err ? reject(err) : resolve(res))))
+}
+
+/** "ssh-ed25519 SHA256:…", as stored in known hosts. */
+function hostKeyId(key: Buffer): string {
+  const fingerprint = 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '')
+  const keyType = key.subarray(4, 4 + key.readUInt32BE(0)).toString()
+  return `${keyType} ${fingerprint}`
 }
 
 function openSftp(client: Client): Promise<SFTPWrapper> {
