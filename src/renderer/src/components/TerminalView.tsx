@@ -105,11 +105,15 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     // Windows-style clipboard keys. On macOS Cmd+C / Cmd+V come from the Edit menu.
     t.attachCustomKeyEventHandler((e) => {
       if (isMac || e.type !== 'keydown' || !e.ctrlKey || e.altKey) return true
-      // Ctrl+Backspace / Ctrl+Delete delete a word, like in other editors and terminals
-      // (^W and Esc-d, which shells and vim understand). On macOS Option+Backspace does this.
+      // Ctrl+Backspace / Ctrl+Delete delete a word as on Windows, where punctuation
+      // splits words ("aaa-bbb" loses only "bbb"): the shell's Esc-Backspace / Esc-d.
+      // Full-screen programs like vim would read Esc as "leave insert mode", so they
+      // get ^W, and Ctrl+Delete keeps its usual key code. On macOS Option+Backspace does this.
       if (!e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+        const fullScreen = t.buffer.active.type === 'alternate'
+        if (fullScreen && e.key === 'Delete') return true
         e.preventDefault()
-        t.input(e.key === 'Backspace' ? '\x17' : '\x1bd')
+        t.input(e.key === 'Delete' ? '\x1bd' : fullScreen ? '\x17' : '\x1b\x7f')
         return false
       }
       const k = e.key.toLowerCase()
