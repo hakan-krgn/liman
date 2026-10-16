@@ -599,6 +599,22 @@ code {
 .xterm .xterm-viewport {
   background: transparent !important;
 }
+/* Instant typing: guesses drawn above the terminal until the server confirms them. */
+.typeahead {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+.typeahead span {
+  position: absolute;
+  overflow: hidden;
+  white-space: pre;
+}
+.typeahead i {
+  position: absolute;
+  width: 1px;
+}
 .xterm .xterm-viewport::-webkit-scrollbar {
   width: 10px;
 }

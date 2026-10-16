@@ -21,7 +21,7 @@ interface StoreData {
 
 const defaults: StoreData = {
   hosts: [],
-  settings: { theme: 'system', fontSize: 14, collapsedGroups: [] },
+  settings: { theme: 'system', fontSize: 14, instantTyping: true, collapsedGroups: [] },
   knownHosts: {}
 }
 
@@ -170,6 +170,7 @@ export const store = {
     // Only well-formed values reach the file.
     if (!['system', 'light', 'dark'].includes(next.theme)) next.theme = d.settings.theme
     next.fontSize = Math.min(32, Math.max(8, Math.round(Number(next.fontSize)) || 14))
+    next.instantTyping = next.instantTyping !== false
     next.collapsedGroups = Array.isArray(next.collapsedGroups) ? next.collapsedGroups.filter((g) => typeof g === 'string') : []
     d.settings = next
     save()

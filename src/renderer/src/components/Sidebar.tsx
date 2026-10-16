@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun } from 'lucide-react'
+import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun, Zap } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
@@ -16,6 +16,7 @@ interface Props {
   connected: Set<string>
   themeMode: ThemeMode
   fontSize: number
+  instantTyping: boolean
   collapsedGroups: string[]
   onSettings(patch: Partial<Settings>): void
   onHostsChange(hosts: Host[]): void
@@ -198,6 +199,17 @@ export function Sidebar(p: Props): React.JSX.Element {
             title={themeLabel[p.themeMode]}
           >
             <ThemeIcon size={16} />
+          </button>
+          <button
+            className={`icon-btn${p.instantTyping ? ' on' : ''}`}
+            onClick={() => p.onSettings({ instantTyping: !p.instantTyping })}
+            title={
+              p.instantTyping
+                ? 'Instant typing is on: on distant servers, what you type shows before the server echoes it'
+                : 'Instant typing is off'
+            }
+          >
+            <Zap size={16} />
           </button>
           <div className="font-stepper" title="Terminal font size (Ctrl + scroll)">
             <button className="icon-btn" onClick={() => p.onSettings({ fontSize: Math.max(FONT_MIN, p.fontSize - 1) })}>

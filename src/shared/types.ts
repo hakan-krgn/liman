@@ -27,6 +27,8 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 export interface Settings {
   theme: ThemeMode
   fontSize: number
+  /** Show typing before a distant server echoes it. */
+  instantTyping: boolean
   /** Sidebar groups the user folded away. */
   collapsedGroups: string[]
 }

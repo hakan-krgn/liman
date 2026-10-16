@@ -44,6 +44,7 @@ Drag anything from your desktop onto a terminal: Liman finds the folder that she
 - **SFTP panel:** Browse folders, drop onto a folder to upload into it, double-click to download (to your Downloads folder), rename, delete, create folders, and jump to the terminal's current directory.
 - **Drag-and-drop downloads:** Drag files or folders out of the SFTP panel onto the desktop or an Explorer / Finder window and they are downloaded right where you drop them. On macOS, Liman asks once for permission to see which Finder windows are open.
 - **Conflict handling:** If a file with the same name already exists you can choose *Keep both* (`file (1).txt`), *Replace* or *Cancel*.
+- **Instant typing:** on distant servers, what you type and delete shows at once instead of after the server's echo (like Mosh). Liman checks every guess against what the server sends and drops wrong ones, and it never guesses at password prompts or in full-screen programs such as vim. Toggle it with the ⚡ button in the sidebar.
 - **Light / dark / system theme**; terminal font zoom with Ctrl/Cmd + scroll or Ctrl/Cmd + = / - / 0.
 - **Organised host list:** drag hosts and groups into any order, move hosts between groups, collapse groups you don't need.
 - **Authentication:** password, SSH key (including passphrase-protected keys), SSH agent, and keyboard-interactive (2FA).

@@ -9,12 +9,15 @@ import type { Tab } from '../App'
 import { api, copyWithConfirm, droppedPaths, errorMessage, hasFiles, isMac, remoteDragOf, setRemoteDrag, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
 import { SftpPanel, type Peer } from './SftpPanel'
 import { useAutoReconnect } from '../useAutoReconnect'
+import { TypeAhead, type Prediction } from '../typeahead'
 
 interface Props {
   tab: Tab
   active: boolean
   theme: 'light' | 'dark'
   fontSize: number
+  /** Show typing before the server echoes it. */
+  instantTyping: boolean
   onSession(sessionId: string): void
   onReconnect(): void
   onClose(): void
@@ -27,10 +30,11 @@ interface Props {
 
 export const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace'
 
-export function TerminalView({ tab, active, theme, fontSize, onSession, onReconnect, onClose, onToggleFiles, onZoom, peers }: Props): React.JSX.Element {
+export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSession, onReconnect, onClose, onToggleFiles, onZoom, peers }: Props): React.JSX.Element {
   const hostEl = useRef<HTMLDivElement>(null)
   const term = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
+  const typeAhead = useRef<TypeAhead | null>(null)
   const sessionId = useRef<string>('')
   const live = useRef({ status: tab.status, onReconnect, onZoom })
   live.current = { status: tab.status, onReconnect, onZoom }
@@ -83,6 +87,14 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     } catch {
       /* WebGL unavailable */
     }
+    // Instant typing draws its guesses on a layer above the terminal.
+    const overlay = document.createElement('div')
+    overlay.className = 'typeahead'
+    t.element!.querySelector('.xterm-screen')!.appendChild(overlay)
+    const ta = new TypeAhead(t, (p) => drawPrediction(t, overlay, p))
+    ta.setEnabled(instantTyping)
+    typeAhead.current = ta
+
     term.current = t
     fit.current = f
     refit()
@@ -97,7 +109,10 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
 
     t.onData((d) => {
       const { status, onReconnect } = live.current
-      if (status === 'connected') api.write(sessionId.current, d)
+      if (status === 'connected') {
+        ta.input(d)
+        api.write(sessionId.current, d)
+      }
       else if ((status === 'closed' || status === 'error') && d === '\r') onReconnect()
     })
     t.onResize(({ cols, rows }) => sessionId.current && api.resize(sessionId.current, cols, rows))
@@ -171,6 +186,7 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     ro.observe(hostEl.current!)
     return () => {
       ro.disconnect()
+      ta.dispose()
       t.dispose()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -182,6 +198,7 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     refit()
     const id = crypto.randomUUID()
     sessionId.current = id
+    typeAhead.current?.reset()
     const off = onSessionData(id, (d) => t.write(d))
     onSession(id)
     if (tab.attempt > 0) t.write('\r\n')
@@ -199,6 +216,8 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     term.current.options.fontSize = fontSize
     refit()
   }, [theme, fontSize])
+
+  useEffect(() => typeAhead.current?.setEnabled(instantTyping), [instantTyping])
 
   useEffect(() => {
     if (!active) return
@@ -338,5 +357,37 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
         <SftpPanel sessionId={tab.sessionId} connected={connected} peers={peers} onClose={onToggleFiles} />
       )}
     </div>
+  )
+}
+
+/**
+ * Paints instant-typing guesses over the terminal: each changed cell in the
+ * terminal's font and colours, plus the cursor where it will be. Applied in the
+ * next animation frame, right after the terminal's own repaint, so a confirmed
+ * guess hands over to the real text without a flicker.
+ */
+function drawPrediction(t: Terminal, el: HTMLElement, p: Prediction | null): void {
+  cancelAnimationFrame(Number(el.dataset.frame))
+  el.dataset.frame = String(
+    requestAnimationFrame(() => {
+      el.replaceChildren()
+      const screen = el.parentElement
+      if (!p || !screen) return
+      const w = screen.clientWidth / t.cols
+      const h = screen.clientHeight / t.rows
+      const theme = t.options.theme ?? {}
+      el.style.fontFamily = t.options.fontFamily ?? ''
+      el.style.fontSize = `${t.options.fontSize}px`
+      el.style.color = theme.foreground ?? ''
+      for (const c of p.cells) {
+        const cell = document.createElement('span')
+        cell.textContent = c.ch
+        cell.style.cssText = `left:${c.x * w}px;top:${p.y * h}px;width:${w}px;height:${h}px;line-height:${h}px;background:${theme.background ?? ''}`
+        el.appendChild(cell)
+      }
+      const cursor = document.createElement('i')
+      cursor.style.cssText = `left:${p.cursorX * w}px;top:${p.y * h}px;height:${h}px;background:${theme.cursor ?? theme.foreground ?? ''}`
+      el.appendChild(cursor)
+    })
   )
 }

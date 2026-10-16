@@ -253,6 +253,7 @@ export function App(): React.JSX.Element {
         connected={connectedHosts}
         themeMode={settings.theme}
         fontSize={settings.fontSize}
+        instantTyping={settings.instantTyping}
         collapsedGroups={settings.collapsedGroups}
         onSettings={updateSettings}
         onHostsChange={setHosts}
@@ -296,6 +297,7 @@ export function App(): React.JSX.Element {
               active={t.id === activeId}
               theme={theme}
               fontSize={settings.fontSize}
+              instantTyping={settings.instantTyping}
               onZoom={zoom}
               peers={tabs
                 .filter((o) => o.id !== t.id && o.status === 'connected' && o.sessionId)
