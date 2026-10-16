@@ -193,24 +193,26 @@ export function Sidebar(p: Props): React.JSX.Element {
           <Plus size={15} /> New host
         </button>
         <div className="foot-tools">
-          <button
-            className="icon-btn"
-            onClick={() => p.onSettings({ theme: nextTheme[p.themeMode] })}
-            title={themeLabel[p.themeMode]}
-          >
-            <ThemeIcon size={16} />
-          </button>
-          <button
-            className={`icon-btn${p.instantTyping ? ' on' : ''}`}
-            onClick={() => p.onSettings({ instantTyping: !p.instantTyping })}
-            title={
-              p.instantTyping
-                ? 'Instant typing is on: on distant servers, what you type shows before the server echoes it'
-                : 'Instant typing is off'
-            }
-          >
-            <Zap size={16} />
-          </button>
+          <div className="foot-toggles">
+            <button
+              className="icon-btn"
+              onClick={() => p.onSettings({ theme: nextTheme[p.themeMode] })}
+              title={themeLabel[p.themeMode]}
+            >
+              <ThemeIcon size={16} />
+            </button>
+            <button
+              className={`icon-btn${p.instantTyping ? ' on' : ''}`}
+              onClick={() => p.onSettings({ instantTyping: !p.instantTyping })}
+              title={
+                p.instantTyping
+                  ? 'Instant typing is on: on distant servers, what you type shows before the server echoes it'
+                  : 'Instant typing is off'
+              }
+            >
+              <Zap size={16} />
+            </button>
+          </div>
           <div className="font-stepper" title="Terminal font size (Ctrl + scroll)">
             <button className="icon-btn" onClick={() => p.onSettings({ fontSize: Math.max(FONT_MIN, p.fontSize - 1) })}>
               <Minus size={14} />

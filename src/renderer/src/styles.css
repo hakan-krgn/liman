@@ -435,6 +435,11 @@ code {
   justify-content: space-between;
   align-items: center;
 }
+.foot-toggles {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
 .font-stepper {
   display: flex;
   align-items: center;
