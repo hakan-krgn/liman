@@ -3,7 +3,7 @@ import type { AnyAuthMethod, KeyboardInteractiveAuthMethod, NextAuthHandler } fr
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join, posix } from 'node:path'
+import { basename, dirname, join, posix } from 'node:path'
 import { store } from './store'
 import { inside, limiter, pool, safeLocalName, uniqueName } from './util'
 import type {
@@ -745,8 +745,12 @@ export class SessionManager {
     })
   }
 
-  /** Downloads into `localDir`; resolves with the local path to reveal when done. */
-  async download(sessionId: string, remotePaths: string[], localDir: string): Promise<string | undefined> {
+  /**
+   * Downloads into `localDir`; resolves with the local path to reveal when done.
+   * With `targets`, each remote path goes to exactly that local path instead
+   * (used when files were dragged onto the desktop and a stand-in sits there).
+   */
+  async download(sessionId: string, remotePaths: string[], localDir: string, targets?: string[]): Promise<string | undefined> {
     const s = this.get(sessionId)
     const browse = await this.sftp(s)
     await fsp.mkdir(localDir, { recursive: true })
@@ -761,16 +765,18 @@ export class SessionManager {
     const reserved: string[] = []
     const firstLocal: string[] = []
     try {
-      for (const p of remotePaths) {
-        let local: string
-        do {
-          const name = await uniqueName(safeLocalName(posix.basename(p)), async (n) => {
-            const full = join(localDir, n)
-            return this.reserved.has(full) || (await fsp.access(full).then(() => true, () => false))
-          })
-          local = inside(localDir, name)
-          // Re-check synchronously: another download may have taken it while we awaited.
-        } while (this.reserved.has(local))
+      for (const [i, p] of remotePaths.entries()) {
+        let local = targets?.[i]
+        if (!local) {
+          do {
+            const name = await uniqueName(safeLocalName(posix.basename(p)), async (n) => {
+              const full = join(localDir, n)
+              return this.reserved.has(full) || (await fsp.access(full).then(() => true, () => false))
+            })
+            local = inside(localDir, name)
+            // Re-check synchronously: another download may have taken it while we awaited.
+          } while (this.reserved.has(local))
+        }
         this.reserved.add(local)
         reserved.push(local)
         firstLocal.push(local)
@@ -810,7 +816,7 @@ export class SessionManager {
       }
 
       const label = remotePaths.length === 1 ? posix.basename(remotePaths[0]) : `${remotePaths.length} items`
-      const target = remotePaths.length === 1 ? firstLocal[0] : localDir
+      const target = remotePaths.length === 1 ? firstLocal[0] : targets ? dirname(firstLocal[0]) : localDir
       const ok = await this.transfer(
         s,
         'down',

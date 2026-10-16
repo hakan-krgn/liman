@@ -179,22 +179,53 @@ export async function copyWithConfirm(fromId: string, paths: string[], toId: str
 }
 
 // --------------------------------------------------------- remote drags
-// Files dragged out of a files panel. Only the drag's type is visible while
-// hovering, so the payload is kept here.
+// Files dragged out of a files panel. Normally that's an OS drag of local
+// stand-ins (so it can land on the desktop); if those can't be made, a plain
+// in-app drag with REMOTE_DRAG data. Either way the payload is kept here.
 
 export const REMOTE_DRAG = 'application/x-liman-remote'
-export type RemoteDrag = { sessionId: string; paths: string[] }
+export type RemoteDrag = { sessionId: string; paths: string[]; standIns?: string[] }
 let remoteDrag: RemoteDrag | null = null
+let clearTimer: ReturnType<typeof setTimeout> | undefined
+let startedAt = 0
 
 export function setRemoteDrag(drag: RemoteDrag | null): void {
+  clearTimeout(clearTimer)
   remoteDrag = drag
+  startedAt = Date.now()
 }
 
-export function currentRemoteDrag(): RemoteDrag | null {
-  return remoteDrag
-}
+// The OS drag ended (dropped anywhere): forget it once drop handlers have run.
+api.onDragOutEnded(() => {
+  clearTimeout(clearTimer)
+  clearTimer = setTimeout(() => (remoteDrag = null), 1500)
+})
+
+// The window gets no mouse moves during an OS drag, so one means it's over
+// (that's how macOS, where the drag doesn't block, finds out).
+window.addEventListener('mousemove', () => {
+  if (remoteDrag?.standIns && Date.now() - startedAt > 500) remoteDrag = null
+})
 
 export const isRemoteDrag = (e: DragEvent): boolean => e.dataTransfer.types.includes(REMOTE_DRAG)
+
+const samePath = (a: string, b: string): boolean =>
+  isMac ? a === b : a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
+
+/**
+ * The files-panel drag behind a drag event, or null for files from elsewhere.
+ * While hovering only the drag's type is known; on drop (`dropping`) the
+ * dropped paths must be exactly our stand-ins.
+ */
+export function remoteDragOf(e: DragEvent, dropping = false): RemoteDrag | null {
+  const d = remoteDrag
+  if (!d) return null
+  if (isRemoteDrag(e)) return d
+  if (!d.standIns || !hasFiles(e)) return null
+  if (!dropping) return d
+  const paths = droppedPaths(e)
+  return paths.length > 0 && paths.every((p) => d.standIns!.some((s) => samePath(s, p))) ? d : null
+}
 
 export function droppedPaths(e: DragEvent): string[] {
   return Array.from(e.dataTransfer.files)

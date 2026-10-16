@@ -42,6 +42,7 @@ Drag anything from your desktop onto a terminal: Liman finds the folder that she
 
 - **Drag-and-drop uploads:** Drop files or folders from the desktop, Explorer or Finder onto a terminal and they are uploaded to whatever directory that terminal is currently in. The target directory is shown before you drop.
 - **SFTP panel:** Browse folders, drop onto a folder to upload into it, double-click to download (to your Downloads folder), rename, delete, create folders, and jump to the terminal's current directory.
+- **Drag-and-drop downloads:** Drag files or folders out of the SFTP panel onto the desktop or an Explorer / Finder window and they are downloaded right where you drop them. On macOS, Liman asks once for permission to see which Finder windows are open.
 - **Conflict handling:** If a file with the same name already exists you can choose *Keep both* (`file (1).txt`), *Replace* or *Cancel*.
 - **Light / dark / system theme**; terminal font zoom with Ctrl/Cmd + scroll or Ctrl/Cmd + = / - / 0.
 - **Organised host list:** drag hosts and groups into any order, move hosts between groups, collapse groups you don't need.

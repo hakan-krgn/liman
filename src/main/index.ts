@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { store } from './store'
 import { SessionManager } from './ssh'
 import { Updater } from './updater'
+import { DragOut, type DragOutEntry } from './dragout'
 import type { ConflictMode, HostInput, PromptResponse, Settings } from '@shared/types'
 
 // Development-only switches; a packaged build ignores them so nobody can point
@@ -57,6 +58,11 @@ const sessions = new SessionManager({
     resolvePrompts((s) => s === sessionId)
   }
 })
+
+const dragOut = new DragOut(async (sessionId, remotes, targets) => {
+  for (const t of targets) revealable.add(t)
+  await sessions.download(sessionId, remotes, app.getPath('downloads'), targets)
+}, (line) => writeLog(line))
 
 const updater = new Updater((status) => {
   if (win && !win.isDestroyed()) win.webContents.send('update:status', status)
@@ -219,6 +225,25 @@ function registerIpc(): void {
   on('clipboard:write', (text) => {
     const value = str(text)
     if (value.length <= 1_000_000) clipboard.writeText(value)
+  })
+  // Dragging remote files onto the desktop: stand-ins are made synchronously during dragstart.
+  // Setting returnValue sends the reply at once, so it's set exactly once.
+  ipcMain.on('dragout:prepare', (e, sessionId: unknown, entries: unknown) => {
+    let result: ReturnType<DragOut['prepare']> | null = null
+    try {
+      if (trusted(e) && typeof sessionId === 'string' && Array.isArray(entries) && entries.length > 0) {
+        const list = entries.filter((x): x is DragOutEntry => !!x && typeof x.path === 'string' && typeof x.isDir === 'boolean')
+        if (list.length === entries.length) result = dragOut.prepare(sessionId, list)
+      }
+    } catch (err) {
+      writeLog(`drag to desktop: ${(err as Error).message}`)
+    }
+    e.returnValue = result
+  })
+  on('dragout:begin', (token) => {
+    if (!win) return
+    const contents = win.webContents
+    void dragOut.begin(str(token), contents, () => !contents.isDestroyed() && contents.send('dragout:ended'))
   })
   on('shell:showItem', (path) => {
     if (revealable.has(str(path))) shell.showItemInFolder(str(path))

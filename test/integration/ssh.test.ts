@@ -225,6 +225,21 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     expect(new Set([a, b])).toEqual(new Set([join(out, 'same.txt'), join(out, 'same (1).txt')]))
   })
 
+  it('downloads into exact targets, replacing dropped stand-ins', async () => {
+    await remote(`mkdir -p ${base}/drag/site/css && printf body > ${base}/drag/site/css/a.css && printf real > ${base}/drag/one.txt`)
+    const drop = join(local, 'drop')
+    mkdirSync(join(drop, 'site (2)'), { recursive: true })
+    writeFileSync(join(drop, 'one.txt'), 'stand-in')
+    const result = await manager.download(SID, [`${base}/drag/one.txt`, `${base}/drag/site`], join(local, 'unused'), [
+      join(drop, 'one.txt'),
+      join(drop, 'site (2)')
+    ])
+    expect(result).toBe(drop)
+    expect(readFileSync(join(drop, 'one.txt'), 'utf8')).toBe('real')
+    expect(readFileSync(join(drop, 'site (2)', 'css', 'a.css'), 'utf8')).toBe('body')
+    await remote(`rm -rf ${base}/drag`)
+  })
+
   it('renames, creates and recursively removes', async () => {
     await manager.mkdir(SID, `${base}/newdir`)
     await manager.rename(SID, `${base}/same.txt`, `${base}/renamed.txt`)

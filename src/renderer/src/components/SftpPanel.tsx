@@ -20,7 +20,6 @@ import {
   cachedListing,
   confirmDialog,
   copyWithConfirm,
-  currentRemoteDrag,
   droppedPaths,
   errorMessage,
   fetchListing,
@@ -31,6 +30,7 @@ import {
   isMac,
   isRemoteDrag,
   REMOTE_DRAG,
+  remoteDragOf,
   setRemoteDrag,
   type Listing,
   showDialog,
@@ -258,7 +258,16 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     if (!sessionId) return
     const items = selected.has(item.path) ? selection() : [item]
     if (!selected.has(item.path)) setSelected(new Set([item.path]))
-    setRemoteDrag({ sessionId, paths: items.map((i) => i.path) })
+    const paths = items.map((i) => i.path)
+    // Prefer an OS drag of local stand-ins: it can also land on the desktop or in a folder.
+    const out = api.dragOutPrepare(sessionId, items.map((i) => ({ path: i.path, isDir: i.isDir })))
+    if (out) {
+      e.preventDefault()
+      setRemoteDrag({ sessionId, paths, standIns: out.files })
+      api.dragOutBegin(out.token)
+      return
+    }
+    setRemoteDrag({ sessionId, paths })
     e.dataTransfer.effectAllowed = 'copyMove'
     e.dataTransfer.setData(REMOTE_DRAG, items.map((i) => i.path).join('\n'))
   }
@@ -278,7 +287,7 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     onDragOver: (e: React.DragEvent) => {
       if (!accepts(e)) return
       const target = targetOf(e)
-      const drag = currentRemoteDrag()
+      const drag = remoteDragOf(e)
       // Dragging within this server only means something onto another folder (a move).
       if (drag && drag.sessionId === sessionId) {
         const pointless = drag.paths.some((p) => p === target) || drag.paths.every((p) => parentOf(p) === target)
@@ -308,8 +317,9 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
       const target = dropTarget ?? path
       dragDepth.current = 0
       setDropTarget(null)
-      const drag = currentRemoteDrag()
-      if (!isRemoteDrag(e) || !drag) return upload(droppedPaths(e), target)
+      const drag = remoteDragOf(e, true)
+      if (!drag) return upload(droppedPaths(e), target)
+      setRemoteDrag(null)
       if (drag.sessionId === sessionId) {
         api
           .moveInto(sessionId, drag.paths, target)

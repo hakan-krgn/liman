@@ -6,7 +6,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Loader2, RotateCw, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
-import { api, copyWithConfirm, currentRemoteDrag, droppedPaths, errorMessage, hasFiles, isRemoteDrag, isMac, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
+import { api, copyWithConfirm, droppedPaths, errorMessage, hasFiles, isMac, remoteDragOf, setRemoteDrag, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
 import { SftpPanel, type Peer } from './SftpPanel'
 import { useAutoReconnect } from '../useAutoReconnect'
 
@@ -203,16 +203,16 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
 
   /** Local files, or remote files dragged from another server's files panel. */
   const accepts = (e: React.DragEvent): boolean => {
-    if (hasFiles(e)) return true
-    const drag = isRemoteDrag(e) ? currentRemoteDrag() : null
-    return !!drag && drag.sessionId !== sessionId.current
+    const drag = remoteDragOf(e)
+    // Files from this very server have nowhere to go in its own terminal.
+    return drag ? drag.sessionId !== sessionId.current : hasFiles(e)
   }
 
   const onDragEnter = (e: React.DragEvent): void => {
     if (!accepts(e)) return
     e.preventDefault()
     if (++dragDepth.current > 1) return
-    setDrop({ remote: isRemoteDrag(e) })
+    setDrop({ remote: !!remoteDragOf(e) })
     if (connected) {
       api
         .getCwd(sessionId.current)
@@ -238,7 +238,8 @@ export function TerminalView({ tab, active, theme, fontSize, onSession, onReconn
     dragDepth.current = 0
     setDrop(null)
     if (!connected) return
-    const drag = isRemoteDrag(e) ? currentRemoteDrag() : null
+    const drag = remoteDragOf(e, true)
+    if (drag) setRemoteDrag(null)
     const work = drag
       ? copyWithConfirm(drag.sessionId, drag.paths, sessionId.current, dir)
       : uploadWithConfirm(sessionId.current, droppedPaths(e), dir)

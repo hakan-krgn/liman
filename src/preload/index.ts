@@ -83,6 +83,14 @@ const api = {
   /** macOS: open the release page of the new version. */
   openUpdate: (): void => ipcRenderer.send('update:open'),
   showItem: (path: string): void => ipcRenderer.send('shell:showItem', path),
+  /**
+   * Starts dragging remote files out of a files panel. Returns the local stand-in
+   * paths (the drag then carries those), or null if it couldn't be prepared.
+   */
+  dragOutPrepare: (sessionId: string, entries: { path: string; isDir: boolean }[]): { token: string; files: string[] } | null =>
+    ipcRenderer.sendSync('dragout:prepare', sessionId, entries),
+  dragOutBegin: (token: string): void => ipcRenderer.send('dragout:begin', token),
+  onDragOutEnded: (cb: () => void) => on('dragout:ended', cb),
   /** Puts text on the system clipboard (used for OSC 52 copies from remote programs). */
   copyText: (text: string): void => ipcRenderer.send('clipboard:write', text),
   /** Absolute path of a file dropped from the OS (Explorer / Finder / desktop). */
