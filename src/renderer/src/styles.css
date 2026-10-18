@@ -600,6 +600,8 @@ code {
 .term-host {
   width: 100%;
   height: 100%;
+  /* xterm stacks its own layers (e.g. the WebGL link layer); keep them all below the panels shown over the terminal. */
+  isolation: isolate;
 }
 .xterm .xterm-viewport {
   background: transparent !important;
