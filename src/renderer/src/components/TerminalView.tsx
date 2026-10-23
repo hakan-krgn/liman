@@ -10,6 +10,7 @@ import { api, copyWithConfirm, droppedPaths, errorMessage, hasFiles, isMac, remo
 import { SftpPanel, type Peer } from './SftpPanel'
 import { useAutoReconnect } from '../useAutoReconnect'
 import { TypeAhead, type Prediction } from '../typeahead'
+import { resetModes } from '../terminalModes'
 
 interface Props {
   tab: Tab
@@ -201,7 +202,7 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     typeAhead.current?.reset()
     const off = onSessionData(id, (d) => t.write(d))
     onSession(id)
-    if (tab.attempt > 0) t.write('\r\n')
+    if (tab.attempt > 0) t.write(resetModes(t) + '\r\n')
     api.connect(id, tab.hostId, t.cols, t.rows)
     return () => {
       off()

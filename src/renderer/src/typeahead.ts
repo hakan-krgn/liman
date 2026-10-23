@@ -154,6 +154,7 @@ export class TypeAhead {
   reset(): void {
     this.clear()
     this.echoes = false
+    this.cursorHidden = false
     this.editStart = null
     this.render()
   }
