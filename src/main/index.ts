@@ -207,7 +207,12 @@ function registerIpc(): void {
   handle('sftp:copyBetween', (fromId, paths, toId, dir, mode) =>
     sessions.copyBetween(str(fromId), strs(paths), str(toId), str(dir), mode === 'keepBoth' ? 'keepBoth' : 'replace')
   )
-  handle('sftp:moveInto', (sessionId, paths, dir) => sessions.moveInto(str(sessionId), strs(paths), str(dir)))
+  handle('sftp:copyWithin', (sessionId, paths, dir, mode) =>
+    sessions.copyWithin(str(sessionId), strs(paths), str(dir), mode === 'keepBoth' ? 'keepBoth' : 'replace')
+  )
+  handle('sftp:moveInto', (sessionId, paths, dir, mode) =>
+    sessions.moveInto(str(sessionId), strs(paths), str(dir), mode === 'keepBoth' || mode === 'replace' ? mode : undefined)
+  )
   on('transfer:cancel', (id) => sessions.cancelTransfer(str(id)))
 
   handle('dialog:pickKey', async () => {

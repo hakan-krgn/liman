@@ -64,9 +64,12 @@ const api = {
   /** Server-to-server copy between two open sessions. */
   copyBetween: (fromId: string, paths: string[], toId: string, dir: string, mode: ConflictMode): Promise<void> =>
     ipcRenderer.invoke('sftp:copyBetween', fromId, paths, toId, dir, mode),
-  /** Moves entries into another folder on the same server. */
-  moveInto: (sessionId: string, paths: string[], dir: string): Promise<void> =>
-    ipcRenderer.invoke('sftp:moveInto', sessionId, paths, dir),
+  /** Copies entries into `dir` on the same server; the server does the copying. */
+  copyWithin: (sessionId: string, paths: string[], dir: string, mode: ConflictMode): Promise<void> =>
+    ipcRenderer.invoke('sftp:copyWithin', sessionId, paths, dir, mode),
+  /** Moves entries into another folder on the same server; without `mode` a taken name is an error. */
+  moveInto: (sessionId: string, paths: string[], dir: string, mode?: ConflictMode): Promise<void> =>
+    ipcRenderer.invoke('sftp:moveInto', sessionId, paths, dir, mode),
   onTransfer: (cb: (t: Transfer) => void) => on('transfer:update', cb),
 
   onPrompt: (cb: (id: string, req: PromptRequest) => void) => on('prompt:request', cb),

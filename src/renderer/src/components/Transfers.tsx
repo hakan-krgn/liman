@@ -32,6 +32,8 @@ export function Transfers(): React.JSX.Element | null {
         const speed = secs > 0.5 ? t.done / secs : 0
         const Icon = t.direction === 'up' ? ArrowUp : t.direction === 'copy' ? ArrowLeftRight : ArrowDown
         const route = t.direction === 'copy' ? `${t.sourceHost} → ${t.targetHost}:${t.target}` : t.target
+        // A copy the server does by itself reports no progress.
+        const busy = t.status === 'running' && !t.total
         return (
           <div key={t.id} className={`transfer ${t.status}`}>
             <div className="transfer-icon">
@@ -40,29 +42,17 @@ export function Transfers(): React.JSX.Element | null {
             <div className="transfer-body">
               <div className="transfer-title">
                 <span className="label">{t.label}</span>
-                {t.status === 'running' && <span className="pct">{Math.floor(pct)}%</span>}
+                {t.status === 'running' && !busy && <span className="pct">{Math.floor(pct)}%</span>}
               </div>
               <div
                 className={`transfer-sub ${t.status === 'done' && t.direction === 'down' ? 'clickable' : ''}`}
                 onClick={() => t.status === 'done' && t.direction === 'down' && api.showItem(t.target)}
                 title={route}
               >
-                {t.status === 'error'
-                  ? t.error
-                  : t.status === 'cancelled'
-                    ? 'Cancelled'
-                    : t.status === 'done'
-                      ? t.direction === 'down'
-                        ? 'Saved — show in folder'
-                        : t.direction === 'copy'
-                          ? `Copied to ${t.targetHost}:${t.target}`
-                          : `Uploaded to ${t.target}`
-                      : `${formatBytes(t.done)} of ${formatBytes(t.total)}${speed ? ` · ${formatBytes(speed)}/s` : ''}${
-                          t.direction === 'copy' ? ` · ${t.sourceHost} → ${t.targetHost}` : ''
-                        }`}
+                {subtitle(t, busy, speed)}
               </div>
               {t.status === 'running' && (
-                <div className="bar">
+                <div className={`bar${busy ? ' busy' : ''}`}>
                   <div style={{ width: `${pct}%` }} />
                 </div>
               )}
@@ -79,4 +69,18 @@ export function Transfers(): React.JSX.Element | null {
       })}
     </div>
   )
+}
+
+/** The line under a transfer's name: progress, or how it ended. */
+function subtitle(t: Transfer, busy: boolean, speed: number): string {
+  if (t.status === 'error') return t.error ?? 'Failed'
+  if (t.status === 'cancelled') return 'Cancelled'
+  if (busy) return `Copying on ${t.targetHost}…`
+  if (t.status === 'done') {
+    if (t.direction === 'down') return 'Saved — show in folder'
+    return t.direction === 'copy' ? `Copied to ${t.targetHost}:${t.target}` : `Uploaded to ${t.target}`
+  }
+  const rate = speed ? ` · ${formatBytes(speed)}/s` : ''
+  const route = t.direction === 'copy' ? ` · ${t.sourceHost} → ${t.targetHost}` : ''
+  return `${formatBytes(t.done)} of ${formatBytes(t.total)}${rate}${route}`
 }

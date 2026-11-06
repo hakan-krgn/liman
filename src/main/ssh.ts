@@ -5,7 +5,8 @@ import { promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, posix } from 'node:path'
 import { store } from './store'
-import { inside, limiter, pool, safeLocalName, uniqueName } from './util'
+import { copyName, inside, limiter, pool, safeLocalName, uniqueName } from './util'
+import { shQuote, within } from '@shared/shell'
 import type {
   ConflictMode,
   PromptRequest,
@@ -57,6 +58,8 @@ interface Session {
   transferUnavailable?: boolean
   activeTransfers: number
   transferIdle?: NodeJS.Timeout
+  /** Whether the server can copy by itself (`cp` and `rm` through a shell). */
+  canCp?: Promise<boolean>
 }
 
 interface LoginInfo {
@@ -70,8 +73,8 @@ interface LoginInfo {
 
 interface ActiveTransfer extends Transfer {
   cancelled: boolean
-  /** The transfer's own SFTP channels; closing them aborts it. */
-  channels: SFTPWrapper[]
+  /** The transfer's own channels; closing them aborts it. */
+  channels: { end(): void }[]
 }
 
 const CONNECT_TIMEOUT = 20_000
@@ -937,24 +940,132 @@ export class SessionManager {
   async copyBetween(fromId: string, paths: string[], toId: string, dir: string, mode: ConflictMode): Promise<void> {
     const src = this.get(fromId)
     const dst = this.get(toId)
-    const [srcBrowse, dstBrowse] = await Promise.all([this.sftp(src), this.sftp(dst)])
+    const dstBrowse = await this.sftp(dst)
+    const taken = (n: string): Promise<boolean> => exists(dstBrowse, posix.join(dir, n))
+    // Two tabs on one server share its files: a copy must never land on its own source.
+    const sameFs = sameFilesystem(src, dst)
+    const items: { from: string; to: string }[] = []
+    for (const p of paths) {
+      const base = posix.basename(p)
+      if (sameFs && within(dir, p)) throw new Error(`Can't copy ${base} into itself`)
+      let name = base
+      if (sameFs && posix.dirname(p) === dir) name = await copyName(base, taken)
+      else if (mode === 'keepBoth' || (sameFs && within(p, posix.join(dir, base)))) name = await uniqueName(base, taken)
+      items.push({ from: p, to: posix.join(dir, name) })
+    }
+    await this.copyTree(src, dst, items, dir)
+  }
+
+  /**
+   * Copies entries into `dir` on the same server. The server copies them
+   * itself (`cp -a`, nothing travels through Liman); servers without a shell
+   * get an SFTP copy instead. A copy next to the original is named "x (copy)".
+   */
+  async copyWithin(sessionId: string, paths: string[], dir: string, mode: ConflictMode): Promise<void> {
+    const s = this.get(sessionId)
+    const sftp = await this.sftp(s)
+    const taken = (n: string): Promise<boolean> => exists(sftp, posix.join(dir, n))
+    const items: { from: string; to: string; replace: boolean }[] = []
+    for (const p of paths) {
+      const base = posix.basename(p)
+      if (within(dir, p)) throw new Error(`Can't copy ${base} into itself`)
+      const target = posix.join(dir, base)
+      let to = target
+      let replace = false
+      if (posix.dirname(p) === dir) to = posix.join(dir, await copyName(base, taken))
+      else if (await taken(base)) {
+        // Replacing a folder the source sits in would delete the source.
+        if (mode === 'keepBoth' || within(p, target)) to = posix.join(dir, await uniqueName(base, taken))
+        else replace = true
+      }
+      items.push({ from: p, to, replace })
+    }
+
+    if (!(await this.canCopyOnServer(s))) {
+      const replaced = items.filter((i) => i.replace).map((i) => i.to)
+      if (replaced.length) await this.remove(sessionId, replaced)
+      return this.copyTree(s, s, items, dir)
+    }
+
+    // `rm` first: `cp -a src dst` would put src inside an existing dst folder.
+    const script = items
+      .map((i) => `${i.replace ? `rm -rf -- ${shQuote(i.to)} && ` : ''}cp -a -- ${shQuote(i.from)} ${shQuote(i.to)}`)
+      .join(' &&\n')
+    const label = paths.length === 1 ? posix.basename(paths[0]) : `${paths.length} items`
+    const t = this.startTransfer(sessionId, 'copy', label, dir, 0)
+    t.sourceHost = t.targetHost = sessionLabel(s)
+    this.emitTransfer(t)
+    this.holdTransfer(s)
+    try {
+      await this.execScript(s, script, t)
+      this.finish(t)
+    } catch (err) {
+      this.finish(t, err as Error)
+    } finally {
+      this.releaseTransfer(s)
+    }
+  }
+
+  /** Whether `cp` and `rm` can run on the server (not on SFTP-only accounts or Windows). */
+  private canCopyOnServer(s: Session): Promise<boolean> {
+    s.canCp ??= this.run(s, 'command -v cp >/dev/null && command -v rm >/dev/null').then(
+      (r) => r.code === 0,
+      () => false
+    )
+    return s.canCp
+  }
+
+  /**
+   * Runs a POSIX sh script on its own channel, with no time limit. Cancelling
+   * the transfer closes the channel's input, which stops the script and
+   * everything it started.
+   */
+  private async execScript(s: Session, script: string, t: ActiveTransfer): Promise<void> {
+    const client = (await this.transferClient(s)) ?? s.client
+    // The watcher waits for our input to close (cancel or done), then ends the whole process group.
+    // It reads the channel through fd 3: sh gives background jobs /dev/null as their input.
+    const command = `exec 3<&0\n{ cat <&3 >/dev/null; kill -TERM 0; } >/dev/null 2>&1 &\nexec 3<&-\n${script}`
+    const ch = await promisify<ClientChannel>((cb) => client.exec(`/bin/sh -c ${shQuote(command)}`, cb))
+    t.channels.push(ch)
+    let stderr = ''
+    ch.stderr.on('data', (d: Buffer) => (stderr = (stderr + d.toString('utf8')).slice(-4000)))
+    ch.on('data', () => {})
+    const code = await new Promise<number | null>((resolve) => {
+      let exit: number | null = null
+      ch.on('exit', (c: number | null) => {
+        exit = c
+        resolve(c)
+      })
+      ch.on('close', () => resolve(exit))
+    })
+    ch.end()
+    if (code !== 0 && !t.cancelled) {
+      const line = stderr.trim().split('\n').filter(Boolean).pop()
+      throw new Error(line ?? `The copy stopped (exit code ${code ?? 'unknown'})`)
+    }
+  }
+
+  /**
+   * Copies the trees under `items` from one session to another over SFTP;
+   * the bytes stream through Liman. Everything is listed before anything is
+   * written, so a copy into a folder that is also being copied stays finite.
+   */
+  private async copyTree(src: Session, dst: Session, items: { from: string; to: string }[], dir: string): Promise<void> {
+    const srcBrowse = await this.sftp(src)
     const stat = (p: string): Promise<{ mode: number; size: number }> => promisify((cb) => srcBrowse.stat(p, cb))
 
     const dirs: string[] = []
     const files: FileJob[] = []
     let level: { from: string; to: string }[] = []
-    for (const p of paths) {
-      let name = posix.basename(p)
-      if (mode === 'keepBoth') name = await uniqueName(name, (n) => exists(dstBrowse, posix.join(dir, n)))
-      const to = posix.join(dir, name)
-      const st = await stat(p)
+    for (const { from, to } of items) {
+      const st = await stat(from)
       if ((st.mode & S_IFMT) === S_IFDIR) {
         dirs.push(to)
-        level.push({ from: p, to })
+        level.push({ from, to })
       } else if ((st.mode & S_IFMT) === 0o100000) {
-        files.push({ from: p, to, size: st.size, mode: st.mode })
+        files.push({ from, to, size: st.size, mode: st.mode })
       } else {
-        throw new Error(`${name} is not a regular file`)
+        throw new Error(`${posix.basename(from)} is not a regular file`)
       }
     }
     // Breadth-first; symlinked folders below the top level are skipped (no loops).
@@ -981,9 +1092,14 @@ export class SessionManager {
       })
       level = next
     }
+    // Writing a file opens it for writing first, which would empty a source still to be read.
+    if (sameFilesystem(src, dst)) {
+      const sources = new Set(files.map((f) => f.from))
+      if (files.some((f) => sources.has(f.to))) throw new Error('The copy would overwrite the files it copies')
+    }
 
-    const label = paths.length === 1 ? posix.basename(paths[0]) : `${paths.length} items`
-    const t = this.startTransfer(toId, 'copy', label, dir, files.reduce((n, f) => n + f.size, 0))
+    const label = items.length === 1 ? posix.basename(items[0].from) : `${items.length} items`
+    const t = this.startTransfer(dst.id, 'copy', label, dir, files.reduce((n, f) => n + f.size, 0))
     t.sourceHost = sessionLabel(src)
     t.targetHost = sessionLabel(dst)
     this.emitTransfer(t)
@@ -1013,14 +1129,24 @@ export class SessionManager {
     }
   }
 
-  /** Moves entries into `dir` on the same server (a rename, so it's instant). */
-  async moveInto(sessionId: string, paths: string[], dir: string): Promise<void> {
+  /**
+   * Moves entries into `dir` on the same server (a rename, so it's instant).
+   * A name that is already taken there is an error unless `mode` says what to do.
+   */
+  async moveInto(sessionId: string, paths: string[], dir: string, mode?: ConflictMode): Promise<void> {
     const sftp = await this.sftp(this.get(sessionId))
+    const taken = (n: string): Promise<boolean> => exists(sftp, posix.join(dir, n))
     for (const p of paths) {
-      if (dir === p || dir.startsWith(p.endsWith('/') ? p : p + '/')) throw new Error(`Can't move ${posix.basename(p)} into itself`)
+      const base = posix.basename(p)
+      if (within(dir, p)) throw new Error(`Can't move ${base} into itself`)
       if (posix.dirname(p) === dir) continue
-      const to = posix.join(dir, posix.basename(p))
-      if (await exists(sftp, to)) throw new Error(`${posix.basename(p)} already exists in ${dir}`)
+      let to = posix.join(dir, base)
+      if (await taken(base)) {
+        if (!mode) throw new Error(`${base} already exists in ${dir}`)
+        // Replacing a folder the source sits in would delete the source.
+        if (mode === 'keepBoth' || within(p, to)) to = posix.join(dir, await uniqueName(base, taken))
+        else await this.remove(sessionId, [to])
+      }
       await promisify<void>((cb) => sftp.rename(p, to, cb))
     }
   }
@@ -1164,6 +1290,11 @@ function hostKeyId(key: Buffer): string {
   const fingerprint = 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '')
   const keyType = key.subarray(4, 4 + key.readUInt32BE(0)).toString()
   return `${keyType} ${fingerprint}`
+}
+
+/** Whether two sessions see the same files: the same session, or the same server (host key). */
+function sameFilesystem(a: Session, b: Session): boolean {
+  return a === b || (!!a.login && a.login.hostKey === b.login?.hostKey)
 }
 
 /** "user@host" of a logged-in session, for transfer labels. */

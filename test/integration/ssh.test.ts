@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, sy
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { PromptRequest, PromptResponse } from '@shared/types'
+import type { PromptRequest, PromptResponse, Transfer } from '@shared/types'
 import { SessionManager } from '../../src/main/ssh'
 
 const target = process.env.LIMAN_TEST_SSH
@@ -77,9 +77,14 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
   const statuses = new Map<string, string[]>()
   const lost = new Map<string, boolean | undefined>()
   const prompts: PromptRequest[] = []
+  const transfers = new Map<string, Transfer>()
   let answer: (req: PromptRequest) => PromptResponse = () => null
   const manager = new SessionManager({
     send(channel, ...args) {
+      if (channel === 'transfer:update') {
+        const t = args[0] as Transfer
+        transfers.set(t.id, t)
+      }
       if (channel !== 'ssh:status') return
       const e = args[0] as { sessionId: string; status: string; message?: string; lost?: boolean }
       if (e.status === 'closed') lost.set(e.sessionId, e.lost)
@@ -91,6 +96,9 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     },
     cancelPrompts() {}
   })
+
+  /** The transfer started last, as it ended. */
+  const lastTransfer = (): Transfer | undefined => [...transfers.values()].at(-1)
 
   const waitFor = async (sessionId: string, pred: (s: string) => boolean, ms = 15_000): Promise<string[]> => {
     for (let t = 0; t < ms; t += 50) {
@@ -298,6 +306,97 @@ describe.skipIf(!target)('SSH engine against a real server', () => {
     await expect(manager.moveInto(SID, [`${dir}/target`], `${dir}/target/a`)).rejects.toThrow(/into itself/)
     await remote(`printf 2 > ${dir}/one.txt`)
     await expect(manager.moveInto(SID, [`${dir}/one.txt`], `${dir}/target`)).rejects.toThrow(/already exists/)
+    // With a conflict mode, a taken name is kept alongside or replaced.
+    await manager.moveInto(SID, [`${dir}/one.txt`], `${dir}/target`, 'keepBoth')
+    expect(await remote(`cat '${dir}/target/one (1).txt'`)).toBe('2')
+    await remote(`printf 3 > ${dir}/one.txt`)
+    await manager.moveInto(SID, [`${dir}/one.txt`], `${dir}/target`, 'replace')
+    expect(await remote(`cat ${dir}/target/one.txt; ls ${dir}`)).toBe('3target\n')
+  })
+
+  it('copies on the server itself, naming a copy next to the original', async () => {
+    const dir = `${base}/within`
+    const odd = "it's a file.txt"
+    await remote(
+      `mkdir -p ${dir}/site/css ${dir}/out && printf body > ${dir}/site/css/a.css && ` +
+        `printf one > ${dir}/a.txt && chmod 640 ${dir}/a.txt && printf q > "${dir}/${odd}"`
+    )
+    const list = async (d: string): Promise<string[]> => (await remote(`cd '${d}' && find . | sort`)).trim().split('\n')
+
+    // Next to the original: "(copy)", then "(copy 2)"; modes and odd names survive.
+    await manager.copyWithin(SID, [`${dir}/a.txt`, `${dir}/site`, `${dir}/${odd}`], dir, 'replace')
+    expect(lastTransfer()).toMatchObject({ status: 'done', direction: 'copy', total: 0 })
+    await manager.copyWithin(SID, [`${dir}/a.txt`], dir, 'replace')
+    expect((await remote(`ls -1 ${dir}`)).trim().split('\n')).toEqual([
+      'a (copy 2).txt',
+      'a (copy).txt',
+      'a.txt',
+      "it's a file (copy).txt",
+      "it's a file.txt",
+      'out',
+      'site',
+      'site (copy)'
+    ])
+    expect(await list(`${dir}/site (copy)`)).toEqual(await list(`${dir}/site`))
+    expect((await remote(`stat -c %a '${dir}/a (copy).txt'`)).trim()).toBe('640')
+
+    // Into another folder: "replace" replaces (no folder nested inside the old one), "keepBoth" adds "(1)".
+    await remote(`mkdir -p ${dir}/out/site/old && printf x > ${dir}/out/a.txt`)
+    await manager.copyWithin(SID, [`${dir}/site`, `${dir}/a.txt`], `${dir}/out`, 'replace')
+    expect(await list(`${dir}/out`)).toEqual(['.', './a.txt', './site', './site/css', './site/css/a.css'])
+    expect(await remote(`cat ${dir}/out/a.txt`)).toBe('one')
+    await manager.copyWithin(SID, [`${dir}/a.txt`], `${dir}/out`, 'keepBoth')
+    expect(await remote(`cat '${dir}/out/a (1).txt'`)).toBe('one')
+
+    // Never into itself, and never by replacing the folder the source sits in.
+    await expect(manager.copyWithin(SID, [`${dir}/site`], `${dir}/site/css`, 'replace')).rejects.toThrow(/into itself/)
+    await remote(`mkdir -p ${dir}/p/p && printf keep > ${dir}/p/p/f`)
+    await manager.copyWithin(SID, [`${dir}/p/p`], dir, 'replace')
+    expect(await remote(`cat ${dir}/p/p/f; cat '${dir}/p (1)/f'`)).toBe('keepkeep')
+
+    // A failure on the server ends up on the transfer.
+    await manager.copyWithin(SID, [`${dir}/missing`], `${dir}/out`, 'replace')
+    expect(lastTransfer()).toMatchObject({ status: 'error', error: expect.stringMatching(/missing/) })
+  })
+
+  it('copies over SFTP when the server cannot run cp', async () => {
+    const internals = manager as unknown as { sessions: Map<string, { canCp?: Promise<boolean> }> }
+    const s = internals.sessions.get(SID)!
+    const saved = s.canCp
+    s.canCp = Promise.resolve(false)
+    try {
+      const dir = `${base}/nocp`
+      await remote(`mkdir -p ${dir}/src/sub ${dir}/out/src/stale && printf data > ${dir}/src/sub/f`)
+      await manager.copyWithin(SID, [`${dir}/src`], dir, 'replace')
+      await manager.copyWithin(SID, [`${dir}/src`], `${dir}/out`, 'replace')
+      expect(lastTransfer()).toMatchObject({ status: 'done' })
+      expect(await remote(`cat '${dir}/src (copy)/sub/f'; cd ${dir}/out && find . | sort`)).toBe(
+        'data.\n./src\n./src/sub\n./src/sub/f\n'
+      )
+    } finally {
+      s.canCp = saved
+    }
+  })
+
+  it('never empties the source when two tabs on one server copy into the same folder', async () => {
+    addHost('twin')
+    manager.connect('twin', 'twin', 80, 24)
+    expect(await waitFor('twin', (x) => x === 'connected')).toContain('connected')
+    const dir = `${base}/twin`
+    await remote(`mkdir -p ${dir}/folder && head -c 300001 /dev/urandom > ${dir}/data.bin && printf x > ${dir}/folder/x`)
+    const md5 = async (f: string): Promise<string> => (await remote(`md5sum '${f}'`)).split(' ')[0]
+    const before = await md5(`${dir}/data.bin`)
+
+    // "Replace" into the source's own folder would open data.bin for writing: it becomes a copy instead.
+    await manager.copyBetween(SID, [`${dir}/data.bin`, `${dir}/folder`], 'twin', dir, 'replace')
+    expect(lastTransfer()).toMatchObject({ status: 'done' })
+    expect(await md5(`${dir}/data.bin`)).toBe(before)
+    expect(await md5(`${dir}/data (copy).bin`)).toBe(before)
+    expect(await remote(`cat '${dir}/folder (copy)/x'`)).toBe('x')
+    await expect(manager.copyBetween(SID, [`${dir}/folder`], 'twin', `${dir}/folder`, 'replace')).rejects.toThrow(
+      /into itself/
+    )
+    manager.disconnect('twin')
   })
 
   it('applies a resize that happens while connecting', async () => {

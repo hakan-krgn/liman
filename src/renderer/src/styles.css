@@ -1062,6 +1062,19 @@ code {
   border-radius: 4px;
   transition: width 0.15s linear;
 }
+/* No progress to show (the server copies by itself): a sliding bar. */
+.bar.busy div {
+  width: 30%;
+  animation: slide 1.2s ease-in-out infinite;
+}
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
 
 /* ------------------------------------------------------------------ modals */
 

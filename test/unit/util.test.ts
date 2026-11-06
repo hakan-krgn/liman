@@ -1,6 +1,7 @@
 import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { inside, isNewerVersion, limiter, pool, safeLocalName, uniqueName } from '../../src/main/util'
+import { copyName, inside, isNewerVersion, limiter, pool, safeLocalName, screenshotName, uniqueName } from '../../src/main/util'
+import { shQuote, within } from '../../src/shared/shell'
 
 describe('safeLocalName', () => {
   it('keeps ordinary names', () => {
@@ -67,6 +68,43 @@ describe('uniqueName', () => {
   it('treats dotfiles and folders as having no extension', async () => {
     expect(await uniqueName('.bashrc', takenFrom(['.bashrc']))).toBe('.bashrc (1)')
     expect(await uniqueName('folder', takenFrom(['folder']))).toBe('folder (1)')
+  })
+})
+
+describe('copyName', () => {
+  const takenFrom = (names: string[]) => async (n: string) => names.includes(n)
+
+  it('names a copy next to the original, counting up', async () => {
+    expect(await copyName('a.txt', takenFrom(['a.txt']))).toBe('a (copy).txt')
+    expect(await copyName('a.txt', takenFrom(['a.txt', 'a (copy).txt']))).toBe('a (copy 2).txt')
+    expect(await copyName('a.txt', takenFrom(['a (copy).txt', 'a (copy 2).txt']))).toBe('a (copy 3).txt')
+  })
+
+  it('keeps dotfiles and folders whole', async () => {
+    expect(await copyName('.bashrc', takenFrom([]))).toBe('.bashrc (copy)')
+    expect(await copyName('site', takenFrom([]))).toBe('site (copy)')
+  })
+})
+
+describe('screenshotName', () => {
+  it('stamps the local date and time', () => {
+    expect(screenshotName(new Date(2026, 10, 6, 9, 5, 3))).toBe('screenshot-2026-11-06-09-05-03.png')
+  })
+})
+
+describe('shQuote and within', () => {
+  it('quotes one shell word, quotes included', () => {
+    expect(shQuote('plain')).toBe("'plain'")
+    expect(shQuote("it's here")).toBe("'it'\\''s here'")
+    expect(shQuote('$(rm -rf ~) `x` "y"')).toBe(`'$(rm -rf ~) \`x\` "y"'`)
+  })
+
+  it('tells whether a remote path is a folder or inside it', () => {
+    expect(within('/a/b', '/a/b')).toBe(true)
+    expect(within('/a/b/c', '/a/b')).toBe(true)
+    expect(within('/a/bc', '/a/b')).toBe(false)
+    expect(within('/a', '/a/b')).toBe(false)
+    expect(within('/x', '/')).toBe(true)
   })
 })
 

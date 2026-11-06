@@ -50,15 +50,35 @@ export async function pool<T>(items: T[], limit: number, fn: (item: T) => Promis
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
 }
 
+/** "name" and ".ext" of a file name; a dotfile such as ".bashrc" has no extension. */
+function splitExt(name: string): [string, string] {
+  const ext = name.startsWith('.') && name.indexOf('.', 1) < 0 ? '' : extname(name)
+  return [name.slice(0, name.length - ext.length), ext]
+}
+
 /** `name` if free, otherwise `name (1).ext`, `name (2).ext`, … whichever `taken` reports free first. */
 export async function uniqueName(name: string, taken: (n: string) => Promise<boolean>): Promise<string> {
   if (!(await taken(name))) return name
-  const ext = name.startsWith('.') && name.indexOf('.', 1) < 0 ? '' : extname(name)
-  const stem = name.slice(0, name.length - ext.length)
+  const [stem, ext] = splitExt(name)
   for (let i = 1; ; i++) {
     const candidate = `${stem} (${i})${ext}`
     if (!(await taken(candidate))) return candidate
   }
+}
+
+/** For a copy next to the original: `name (copy).ext`, then `name (copy 2).ext`, … */
+export async function copyName(name: string, taken: (n: string) => Promise<boolean>): Promise<string> {
+  const [stem, ext] = splitExt(name)
+  for (let i = 1; ; i++) {
+    const candidate = `${stem} (copy${i > 1 ? ` ${i}` : ''})${ext}`
+    if (!(await taken(candidate))) return candidate
+  }
+}
+
+/** "screenshot-2026-11-06-14-30-12.png" in local time, for a pasted image. */
+export function screenshotName(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `screenshot-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}.png`
 }
 
 /** True when version `a` is newer than `b` (both `x.y.z`, an optional `v` and pre-release tag allowed). */
