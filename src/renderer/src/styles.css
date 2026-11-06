@@ -1628,17 +1628,101 @@ select:disabled {
   letter-spacing: 0.04em;
   color: var(--muted);
 }
-.set-shortcuts dl {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 6px 16px;
-  margin: 0;
+.sc-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 0 8px;
+  background: var(--surface);
 }
-.set-shortcuts dd {
-  margin: 0;
-  text-align: right;
+.sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border);
+}
+.sc-keys {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.sc-fixed {
   color: var(--faint);
-  white-space: nowrap;
+  opacity: 0.75;
+}
+.sc-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.sc-chip kbd {
+  cursor: pointer;
+}
+.sc-chip kbd:hover {
+  border-color: var(--accent);
+}
+.sc-chip button,
+.sc-add,
+.sc-reset {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+/* Remove: a small badge on the key's corner, while the pointer is over it. */
+.sc-chip button {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11px;
+  line-height: 1;
+  visibility: hidden;
+}
+.sc-chip:hover button {
+  visibility: visible;
+}
+.sc-chip button:hover,
+.sc-add:hover,
+.sc-reset:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.set-shortcuts kbd.recording {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.sc-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 0 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.sc-note.error {
+  color: var(--danger);
+}
+.sc-note .btn {
+  height: 26px;
+  padding: 0 10px;
 }
 .set-shortcuts kbd {
   display: inline-block;

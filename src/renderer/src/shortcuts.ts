@@ -13,6 +13,8 @@ export interface ShortcutDef {
   keys: { win: string[]; mac: string[] }
   /** Handled inside a component (not by the dispatcher); listed for the docs only. */
   local?: boolean
+  /** Can't be changed in Settings (Esc, the numbered tabs). */
+  fixed?: boolean
   /** How the keys read in the docs (Markdown) when the chords alone don't say it well. */
   docKeys?: { win: string; mac: string }
 }
@@ -30,7 +32,8 @@ export const SHORTCUTS: ShortcutDef[] = [
     id: `tab.goto${i + 1}`,
     label: `Go to tab ${i + 1}`,
     scope: 'global',
-    keys: k(`Ctrl+${i + 1}`, `Cmd+${i + 1}`)
+    keys: k(`Ctrl+${i + 1}`, `Cmd+${i + 1}`),
+    fixed: true
   })),
   { id: 'tab.new', label: 'New connection (search hosts)', scope: 'global', keys: k('Ctrl+Shift+T', 'Cmd+T') },
   { id: 'tab.duplicate', label: 'Duplicate tab', scope: 'global', keys: k('Ctrl+Shift+D', 'Cmd+Shift+D') },
@@ -75,7 +78,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'files.filter', label: 'Filter this folder', scope: 'files', keys: k('Ctrl+F', 'Cmd+F') },
   { id: 'files.goTo', label: 'Type a path to go to', scope: 'files', keys: k('Ctrl+L', 'Cmd+Shift+G') },
   { id: 'files.selectAll', label: 'Select all', scope: 'files', keys: k('Ctrl+A', 'Cmd+A') },
-  { id: 'files.escape', label: 'Cancel a cut, then clear the selection', scope: 'files', keys: k('Escape', 'Escape') },
+  { id: 'files.escape', label: 'Cancel a cut, then clear the selection', scope: 'files', keys: k('Escape', 'Escape'), fixed: true },
   {
     id: 'files.move',
     label: 'Move through the list (Shift extends the selection)',
@@ -251,8 +254,11 @@ export const SCOPE_TITLES: Record<Scope, string> = {
   hosts: 'Host list'
 }
 
-/** One documentation row per action (the nine "go to tab" actions share one); keys as Markdown. */
-export function shortcutRows(): { scope: Scope; label: string; win: string; mac: string }[] {
+/**
+ * One documentation row per action (the nine "go to tab" actions share one);
+ * keys as Markdown. Keys the user changed (`overrides`) show in both columns.
+ */
+export function shortcutRows(overrides: Record<string, string[]> = {}): { scope: Scope; label: string; win: string; mac: string }[] {
   const rows: { scope: Scope; label: string; win: string; mac: string }[] = []
   for (const s of SHORTCUTS) {
     if (/^tab\.goto[2-9]$/.test(s.id)) continue
@@ -260,11 +266,113 @@ export function shortcutRows(): { scope: Scope; label: string; win: string; mac:
       rows.push({ scope: s.scope, label: 'Go to tab 1–9', win: '`Ctrl+1…9`', mac: '`⌘1…9`' })
       continue
     }
+    const changed = overrides[s.id]
     const show = (p: Platform): string =>
-      s.docKeys?.[p] ?? s.keys[p].map((t) => `\`${formatChord(parseChord(t), p)}\``).join(' / ')
+      (changed ? undefined : s.docKeys?.[p]) ?? (changed ?? s.keys[p]).map((t) => `\`${formatChord(parseChord(t), p)}\``).join(' / ')
     rows.push({ scope: s.scope, label: s.label, win: show('win'), mac: show('mac') })
   }
   return rows
+}
+
+// ------------------------------------------------------------- changing keys
+
+/** "Ctrl+Shift+K": the form chords are stored and parsed in. */
+export function chordText(c: Chord): string {
+  return [c.ctrl && 'Ctrl', c.meta && 'Cmd', c.alt && 'Alt', c.shift && 'Shift', c.key].filter(Boolean).join('+')
+}
+
+/** Keys that are fine on their own; anything else needs Ctrl, Alt or ⌘ (or it would be typed). */
+const STANDALONE = /^(F([1-9]|1[0-9]|2[0-4])|Enter|Delete|Backspace|Insert|Up|Down|Left|Right|Home|End|PageUp|PageDown)$/
+
+/** Keys the operating system keeps for itself. */
+function systemKey(c: Chord, platform: Platform): string | null {
+  const is = (text: string): boolean => sameChord(c, parseChord(text))
+  if (platform === 'win') {
+    if (c.meta) return 'Windows keeps keys with the Windows key for itself.'
+    if (['Alt+F4', 'Alt+Tab', 'Ctrl+Escape', 'Ctrl+Alt+Delete', 'Alt+Space'].some(is)) return `${formatChord(c, platform)} belongs to Windows.`
+  } else if (['Cmd+Q', 'Cmd+H', 'Cmd+Alt+H', 'Cmd+M', 'Cmd+Tab', 'Cmd+Space', 'Cmd+`', 'Cmd+Alt+Escape', 'Ctrl+Space'].some(is)) {
+    return `${formatChord(c, platform)} belongs to macOS.`
+  }
+  return null
+}
+
+export interface ChordCheck {
+  /** Why the chord can't be used at all. */
+  error?: string
+  /** It can be used, but something else loses it. */
+  warning?: string
+  /** Actions of the same place already on this chord. */
+  conflicts: string[]
+}
+
+/** Whether action `id` may take chord `c`, and what that would clash with. */
+export function checkChord(id: string, c: Chord, platform: Platform, bindings: Bindings): ChordCheck {
+  const def = SHORTCUT_BY_ID.get(id)!
+  const system = systemKey(c, platform)
+  if (system) return { error: system, conflicts: [] }
+  if (c.key === 'Escape') return { error: 'Esc closes dialogs and menus; pick another key.', conflicts: [] }
+  if (!c.ctrl && !c.alt && !c.meta && !STANDALONE.test(c.key)) {
+    return { error: `${platform === 'mac' ? '⌘, ⌥ or ⌃' : 'Ctrl or Alt'} is needed with this key, or it would be typed.`, conflicts: [] }
+  }
+  const conflicts = [...bindings]
+    .filter(([other, chords]) => other !== id && SHORTCUT_BY_ID.get(other)!.scope === def.scope && chords.some((x) => sameChord(x, c)))
+    .map(([other]) => other)
+  // In the terminal, Ctrl+letter is the program's: Ctrl+W deletes a word, Ctrl+R searches history.
+  const shellKey = c.ctrl && !c.alt && !c.meta && !c.shift && /^([A-Z]|\[|\]|\\)$/.test(c.key)
+  const warning =
+    shellKey && (def.scope === 'global' || def.scope === 'terminal')
+      ? `In the terminal ${formatChord(c, platform)} belongs to the shell or program running there; Liman would take it.`
+      : undefined
+  return { warning, conflicts }
+}
+
+/** The chords action `id` has now, as stored text. */
+export function currentKeys(id: string, platform: Platform, overrides: Record<string, string[]>): string[] {
+  return overrides[id] ?? SHORTCUT_BY_ID.get(id)!.keys[platform]
+}
+
+/**
+ * The overrides after giving action `id` chord `text`: in place of chord number
+ * `at`, added (`at` = -1), or alone (`at` undefined). `takeFrom` actions lose the
+ * chord. Actions back on their defaults leave the overrides.
+ */
+export function withChord(
+  overrides: Record<string, string[]>,
+  platform: Platform,
+  id: string,
+  text: string,
+  at?: number,
+  takeFrom: string[] = []
+): Record<string, string[]> {
+  const chord = parseChord(text)
+  const out = { ...overrides }
+  const mine = currentKeys(id, platform, overrides)
+  const next = at === undefined ? [text] : at < 0 ? [...mine, text] : mine.map((t, i) => (i === at ? text : t))
+  out[id] = next.filter((t, i) => next.findIndex((u) => sameChord(parseChord(u), parseChord(t))) === i)
+  for (const other of takeFrom) out[other] = currentKeys(other, platform, out).filter((t) => !sameChord(parseChord(t), chord))
+  return withoutDefaults(out, platform)
+}
+
+/** The overrides after action `id` loses its chord number `at`. */
+export function withoutChord(overrides: Record<string, string[]>, platform: Platform, id: string, at: number): Record<string, string[]> {
+  return withoutDefaults({ ...overrides, [id]: currentKeys(id, platform, overrides).filter((_, i) => i !== at) }, platform)
+}
+
+/** The overrides with action `id` back on its default keys. */
+export function withDefault(overrides: Record<string, string[]>, id: string): Record<string, string[]> {
+  const { [id]: _, ...rest } = overrides
+  return rest
+}
+
+function withoutDefaults(overrides: Record<string, string[]>, platform: Platform): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [id, keys] of Object.entries(overrides)) {
+    const def = SHORTCUT_BY_ID.get(id)
+    if (!def) continue
+    const same = keys.length === def.keys[platform].length && keys.every((t, i) => sameChord(parseChord(t), parseChord(def.keys[platform][i])))
+    if (!same) out[id] = keys
+  }
+  return out
 }
 
 /** The Markdown tables in the README, one per scope. */

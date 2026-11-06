@@ -2,14 +2,21 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  checkChord,
   chordFromEvent,
   chordMatches,
+  chordText,
+  currentKeys,
   findConflicts,
   formatChord,
   parseChord,
   renderShortcutTables,
   resolveBindings,
-  SHORTCUTS
+  SHORTCUTS,
+  shortcutRows,
+  withChord,
+  withDefault,
+  withoutChord
 } from '../../src/renderer/src/shortcuts'
 
 const press = (key: string, mods: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean; code?: string; altGr?: boolean } = {}) =>
@@ -91,5 +98,63 @@ describe('the shortcut list', () => {
     // UPDATE_README=1 rewrites the section instead of comparing.
     if (process.env.UPDATE_README) writeFileSync(path, readme.slice(0, i) + table + readme.slice(j))
     else expect(readme.slice(i, j).replace(/\r\n/g, '\n')).toBe(table)
+  })
+})
+
+describe('changing keys', () => {
+  const win = resolveBindings('win')
+  const check = (id: string, text: string, platform: 'win' | 'mac' = 'win') => checkChord(id, parseChord(text), platform, resolveBindings(platform))
+
+  it('writes chords the way they are read back', () => {
+    for (const text of ['Ctrl+Shift+K', 'Alt+Left', 'F5', 'Ctrl+Plus', 'Cmd+Alt+C', 'Ctrl+,']) expect(chordText(parseChord(text))).toBe(text)
+  })
+
+  it("refuses the system's keys, Esc, and plain letters", () => {
+    expect(check('files.refresh', 'Alt+F4').error).toMatch(/Windows/)
+    expect(check('files.refresh', 'Cmd+R').error).toMatch(/Windows key/)
+    expect(check('files.refresh', 'Cmd+Q', 'mac').error).toMatch(/macOS/)
+    expect(check('files.refresh', 'Escape').error).toMatch(/Esc/)
+    expect(check('files.refresh', 'R').error).toMatch(/typed/)
+    expect(check('files.refresh', 'Shift+R').error).toMatch(/typed/)
+    expect(check('files.refresh', 'F6')).toEqual({ conflicts: [] })
+  })
+
+  it('warns when the terminal would lose a key and finds clashes in the same place', () => {
+    expect(check('tab.close', 'Ctrl+W').warning).toMatch(/shell/)
+    expect(check('files.refresh', 'Ctrl+W').warning).toBeUndefined()
+    expect(check('files.refresh', 'Ctrl+Shift+N').conflicts).toEqual(['files.newFolder'])
+    // F2 in the panel and F2 for the tab are different places: no clash.
+    expect(check('files.rename', 'F2').conflicts).toEqual([])
+    expect(win.get('tab.rename')).toBeDefined()
+  })
+
+  it('stores only what differs from the defaults', () => {
+    let o = withChord({}, 'win', 'files.refresh', 'Ctrl+Shift+Y')
+    expect(o).toEqual({ 'files.refresh': ['Ctrl+Shift+Y'] })
+    o = withChord(o, 'win', 'files.refresh', 'F5', -1)
+    expect(currentKeys('files.refresh', 'win', o)).toEqual(['Ctrl+Shift+Y', 'F5'])
+    o = withoutChord(o, 'win', 'files.refresh', 0)
+    expect(o).toEqual({ 'files.refresh': ['F5'] })
+    // Back to the defaults: nothing stored.
+    o = withChord(o, 'win', 'files.refresh', 'Ctrl+R', -1)
+    expect(o).toEqual({})
+    expect(withDefault({ 'files.refresh': ['F6'] }, 'files.refresh')).toEqual({})
+  })
+
+  it('takes a key away from the action that had it', () => {
+    const o = withChord({}, 'win', 'files.refresh', 'Ctrl+Shift+N', undefined, ['files.newFolder'])
+    expect(o).toEqual({ 'files.refresh': ['Ctrl+Shift+N'], 'files.newFolder': [] })
+    expect(findConflicts(resolveBindings('win', o))).toEqual([])
+    // The F1 list and Settings show the changed keys.
+    const row = shortcutRows(o).find((r) => r.label === 'Refresh')!
+    expect(row.win).toBe('`Ctrl+Shift+N`')
+    expect(shortcutRows(o).find((r) => r.label === 'New folder')!.win).toBe('')
+  })
+
+  it('keeps Esc and the numbered tabs fixed', () => {
+    expect(SHORTCUTS.filter((x) => x.fixed).map((x) => x.id)).toEqual([
+      ...Array.from({ length: 9 }, (_, i) => `tab.goto${i + 1}`),
+      'files.escape'
+    ])
   })
 })

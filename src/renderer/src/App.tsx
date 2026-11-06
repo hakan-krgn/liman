@@ -359,7 +359,7 @@ export function App(): React.JSX.Element {
           }}
         />
       )}
-      {sheetOpen && <ShortcutSheet onClose={() => setSheetOpen(false)} />}
+      {sheetOpen && <ShortcutSheet overrides={settings.shortcuts} onClose={() => setSheetOpen(false)} />}
       {settingsOpen && (
         <SettingsWindow settings={settings} appTheme={theme} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />
       )}

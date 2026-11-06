@@ -5,7 +5,23 @@ import { DEFAULT_SETTINGS, FONT_SIZE } from '@shared/settings'
 import { api, isMac } from '../lib'
 import { TERMINAL_THEME_LIST, terminalTheme } from '../themes'
 import { installedMonospaceFonts, terminalFont } from '../fonts'
-import { SCOPE_TITLES, shortcutRows, type Scope } from '../shortcuts'
+import {
+  checkChord,
+  chordFromEvent,
+  chordText,
+  currentKeys,
+  formatChord,
+  parseChord,
+  resolveBindings,
+  SCOPE_TITLES,
+  SHORTCUT_BY_ID,
+  SHORTCUTS,
+  withChord,
+  withDefault,
+  withoutChord,
+  type Platform,
+  type Scope
+} from '../shortcuts'
 
 type Section = 'appearance' | 'terminal' | 'files' | 'connection' | 'shortcuts' | 'updates'
 
@@ -29,7 +45,7 @@ const SECTIONS: { id: Section; title: string; icon: LucideIcon; keys: (keyof Set
     icon: Network,
     keys: ['autoReconnect', 'reconnectAttempts', 'keepaliveSeconds', 'connectTimeoutSeconds']
   },
-  { id: 'shortcuts', title: 'Shortcuts', icon: Keyboard, keys: [] },
+  { id: 'shortcuts', title: 'Shortcuts', icon: Keyboard, keys: ['shortcuts'] },
   { id: 'updates', title: 'Updates & About', icon: Download, keys: ['autoUpdate'] }
 ]
 
@@ -48,7 +64,8 @@ export function SettingsWindow({ settings, appTheme, onChange, onClose }: Props)
   // Esc closes it, wherever the focus is.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape' || document.querySelector('.dialog-overlay')) return
+      // Not while a dialog is open, or while a shortcut is being recorded (Esc cancels that).
+      if (e.key !== 'Escape' || document.querySelector('.dialog-overlay, .recording')) return
       e.preventDefault()
       e.stopPropagation()
       onClose()
@@ -57,8 +74,10 @@ export function SettingsWindow({ settings, appTheme, onChange, onClose }: Props)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
-  const reset = (): void => onChange(Object.fromEntries(current.keys.map((k) => [k, DEFAULT_SETTINGS[k]])))
-  const isDefault = current.keys.every((k) => JSON.stringify(settings[k]) === JSON.stringify(DEFAULT_SETTINGS[k]))
+  // Changed keys are stored as differences; their default is having none.
+  const defaults: Settings = { ...DEFAULT_SETTINGS, shortcuts: {} }
+  const reset = (): void => onChange(Object.fromEntries(current.keys.map((k) => [k, defaults[k]])))
+  const isDefault = current.keys.every((k) => JSON.stringify(settings[k] ?? defaults[k]) === JSON.stringify(defaults[k]))
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -83,7 +102,7 @@ export function SettingsWindow({ settings, appTheme, onChange, onClose }: Props)
             {section === 'terminal' && <TerminalSection settings={settings} onChange={onChange} />}
             {section === 'files' && <FilesSection settings={settings} onChange={onChange} />}
             {section === 'connection' && <ConnectionSection settings={settings} onChange={onChange} />}
-            {section === 'shortcuts' && <ShortcutsSection />}
+            {section === 'shortcuts' && <ShortcutsSection settings={settings} onChange={onChange} />}
             {section === 'updates' && <UpdatesSection settings={settings} onChange={onChange} />}
           </div>
           {current.keys.length > 0 && (
@@ -345,26 +364,132 @@ function ConnectionSection({ settings: s, onChange }: SectionProps): React.JSX.E
   )
 }
 
-function ShortcutsSection(): React.JSX.Element {
-  const rows = shortcutRows()
+function ShortcutsSection({ settings, onChange }: SectionProps): React.JSX.Element {
+  const platform: Platform = isMac ? 'mac' : 'win'
+  const overrides = settings.shortcuts ?? {}
+  const [query, setQuery] = useState('')
+  /** Waiting for keys for action `id`: in place of its chord `at`, or added (`at` -1). */
+  const [recording, setRecording] = useState<{ id: string; at: number } | null>(null)
+  const [note, setNote] = useState<{ id: string; kind: 'error' | 'warning'; text: string } | null>(null)
+  const [clash, setClash] = useState<{ id: string; text: string; at: number; conflicts: string[] } | null>(null)
+
+  const save = (next: Record<string, string[]>): void => onChange({ shortcuts: next })
+  const show = (text: string): string => formatChord(parseChord(text), platform)
+
+  // While recording, the next key press (with its modifiers) is the new chord; Esc gives up.
+  useEffect(() => {
+    if (!recording) return
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') return setRecording(null)
+      const chord = chordFromEvent(e)
+      if (!chord) return // a modifier on its own: keep waiting
+      const { id, at } = recording
+      setRecording(null)
+      setClash(null)
+      const text = chordText(chord)
+      const check = checkChord(id, chord, platform, resolveBindings(platform, overrides))
+      if (check.error) return setNote({ id, kind: 'error', text: check.error })
+      if (check.conflicts.length) return setClash({ id, text, at, conflicts: check.conflicts })
+      save(withChord(overrides, platform, id, text, at))
+      setNote(check.warning ? { id, kind: 'warning', text: check.warning } : null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording, overrides])
+
+  const q = query.trim().toLowerCase()
+  const shown = SHORTCUTS.filter((d) => !/^tab\.goto[2-9]$/.test(d.id)).filter((d) => {
+    if (!q) return true
+    const keys = d.local || d.fixed ? '' : currentKeys(d.id, platform, overrides).map(show).join(' ')
+    return `${d.label} ${keys}`.toLowerCase().includes(q)
+  })
+
   return (
     <>
-      <p className="set-note">F1 shows this list anywhere in Liman.</p>
-      {(Object.keys(SCOPE_TITLES) as Scope[]).map((scope) => (
-        <section key={scope} className="set-shortcuts">
-          <h4>{SCOPE_TITLES[scope]}</h4>
-          <dl>
-            {rows
-              .filter((r) => r.scope === scope)
-              .map((r) => (
-                <Fragment key={r.label}>
-                  <dt>{r.label}</dt>
-                  <dd>{keyCaps(isMac ? r.mac : r.win)}</dd>
+      <div className="sc-search">
+        <input value={query} placeholder="Search shortcuts" spellCheck={false} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+      <p className="set-note">Click a key to change it, ＋ to add another. F1 shows the list anywhere in Liman.</p>
+      {(Object.keys(SCOPE_TITLES) as Scope[]).map((scope) => {
+        const defs = shown.filter((d) => d.scope === scope)
+        if (!defs.length) return null
+        return (
+          <section key={scope} className="set-shortcuts">
+            <h4>{SCOPE_TITLES[scope]}</h4>
+            {defs.map((d) => {
+              const label = d.id === 'tab.goto1' ? 'Go to tab 1–9' : d.label
+              const changed = d.id in overrides
+              const keys = currentKeys(d.id, platform, overrides)
+              return (
+                <Fragment key={d.id}>
+                  <div className="sc-row">
+                    <span className="sc-label">{label}</span>
+                    <span className="sc-keys">
+                      {d.local || d.fixed ? (
+                        <span className="sc-fixed" title="This one can't be changed">
+                          {keyCaps(d.id === 'tab.goto1' ? (isMac ? '`⌘1…9`' : '`Ctrl+1…9`') : (d.docKeys?.[platform] ?? keys.map((t) => `\`${show(t)}\``).join(' / ')))}
+                        </span>
+                      ) : (
+                        <>
+                          {keys.map((t, i) =>
+                            recording?.id === d.id && recording.at === i ? (
+                              <kbd key={t} className="recording">
+                                Press keys…
+                              </kbd>
+                            ) : (
+                              <span key={t} className="sc-chip">
+                                <kbd title="Click to change" onClick={() => (setNote(null), setRecording({ id: d.id, at: i }))}>
+                                  {show(t)}
+                                </kbd>
+                                <button title="Remove this key" onClick={() => save(withoutChord(overrides, platform, d.id, i))}>
+                                  ×
+                                </button>
+                              </span>
+                            )
+                          )}
+                          {recording?.id === d.id && recording.at === -1 ? (
+                            <kbd className="recording">Press keys…</kbd>
+                          ) : (
+                            <button className="sc-add" title="Add a key" onClick={() => (setNote(null), setRecording({ id: d.id, at: -1 }))}>
+                              ＋
+                            </button>
+                          )}
+                          {changed && (
+                            <button className="sc-reset" title="Back to the default" onClick={() => save(withDefault(overrides, d.id))}>
+                              <RotateCcw size={13} />
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  {note?.id === d.id && <div className={`sc-note ${note.kind}`}>{note.text}</div>}
+                  {clash?.id === d.id && (
+                    <div className="sc-note warning">
+                      {show(clash.text)} is already {clash.conflicts.map((c) => `“${SHORTCUT_BY_ID.get(c)!.label}”`).join(', ')}.
+                      <button
+                        className="btn ghost"
+                        onClick={() => {
+                          save(withChord(overrides, platform, d.id, clash.text, clash.at, clash.conflicts))
+                          setClash(null)
+                        }}
+                      >
+                        Use it here
+                      </button>
+                      <button className="btn ghost" onClick={() => setClash(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                 </Fragment>
-              ))}
-          </dl>
-        </section>
-      ))}
+              )
+            })}
+          </section>
+        )
+      })}
     </>
   )
 }

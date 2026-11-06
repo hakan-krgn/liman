@@ -4,8 +4,8 @@ import { isMac } from '../lib'
 import { SCOPE_TITLES, shortcutRows, type Scope } from '../shortcuts'
 
 /** F1: every keyboard shortcut, grouped by where it works. */
-export function ShortcutSheet({ onClose }: { onClose(): void }): React.JSX.Element {
-  const rows = shortcutRows()
+export function ShortcutSheet({ overrides, onClose }: { overrides?: Record<string, string[]>; onClose(): void }): React.JSX.Element {
+  const rows = shortcutRows(overrides)
   // Esc or F1 again closes it, wherever the focus is.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {

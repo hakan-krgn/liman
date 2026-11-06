@@ -44,7 +44,7 @@ Drag anything from your desktop onto a terminal: Liman finds the folder that she
 - **SFTP panel:** Browse folders, drop onto a folder to upload into it, double-click to download (to your Downloads folder), rename, delete, create folders, and jump to the terminal's current directory.
 - **Drag-and-drop downloads:** Drag files or folders out of the SFTP panel onto the desktop or an Explorer / Finder window and they are downloaded right where you drop them. On macOS, Liman asks once for permission to see which Finder windows are open.
 - **Copy and paste files:** In the SFTP panel, Ctrl+C (⌘C) copies files and folders; paste them in Explorer, Finder or on the desktop and they are downloaded right there (paste as often as you like). Files copied in Explorer or Finder, and screenshots (as PNG), are uploaded with Ctrl+V in the panel; in a terminal, Ctrl+V offers to upload them into its current folder. Pasting in another server's panel copies between the servers; Ctrl+X then Ctrl+V on the same server moves, and a copy next to its original is named `file (copy).txt`. Copies within one server run on the server itself.
-- **Keyboard:** every action has a shortcut: move through files with the arrow keys, type a name to jump to it, filter a folder, go back and forward, refresh with F5, find in the terminal. Press F1 for the full list, or see [Shortcuts](#shortcuts).
+- **Keyboard:** every action has a shortcut: move through files with the arrow keys, type a name to jump to it, filter a folder, go back and forward, refresh with F5, find in the terminal. Press F1 for the full list, change any key in *Settings › Shortcuts*, or see [Shortcuts](#shortcuts).
 - **Conflict handling:** If a file with the same name already exists you can choose *Keep both* (`file (1).txt`), *Replace* or *Cancel*.
 - **Instant typing:** on distant servers, what you type and delete shows at once instead of after the server's echo (like Mosh). Liman checks every guess against what the server sends and drops wrong ones, and it never guesses at password prompts or in full-screen programs such as vim. Toggle it with the ⚡ button in the sidebar.
 - **Settings** (⚙ in the sidebar, Ctrl+, / ⌘,): app theme, terminal colour presets (One Dark, Dracula, Solarized, Nord, Gruvbox, …), font, size, line height and cursor; scrollback, copy on select, right-click menu, a warning before pasting several lines, the bell; hidden files, what to do when a name is taken, where downloads go; reconnecting, keepalive and timeouts; updates. Changes apply at once.
@@ -82,7 +82,7 @@ To ship a version: create a release with a tag such as `v0.2.0` on GitHub (*Rele
 
 ## Shortcuts
 
-On Windows and Linux the terminal sends Ctrl+letter keys to the shell (Ctrl+W deletes a word, Ctrl+R searches history), so Liman's own shortcuts there use Ctrl+Shift. Where a key does two things, the place you're in wins: F2 renames a file in the files panel and the tab elsewhere.
+On Windows and Linux the terminal sends Ctrl+letter keys to the shell (Ctrl+W deletes a word, Ctrl+R searches history), so Liman's own shortcuts there use Ctrl+Shift. Where a key does two things, the place you're in wins: F2 renames a file in the files panel and the tab elsewhere. Any of them can be changed in *Settings › Shortcuts* (click a key, press the new one); Liman refuses keys the system keeps for itself and warns before taking one from the shell. The tables below are the defaults; F1 in the app shows yours.
 
 <!-- shortcuts:start -->
 
