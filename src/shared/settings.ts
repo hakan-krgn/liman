@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rightClick: 'copyPaste',
   confirmMultilinePaste: true,
   bell: 'off',
+  localShell: '',
   // Files
   showHidden: true,
   conflictDefault: 'ask',
@@ -58,6 +59,11 @@ const int =
     return Number.isFinite(n) && v !== null && v !== '' ? Math.min(max, Math.max(min, n)) : prev
   }
 
+/** An absolute path, or '' for "the usual one". */
+function absolutePath(v: unknown, prev: string): string {
+  return typeof v === 'string' && (v === '' || /^([a-zA-Z]:[\\/]|\/)/.test(v)) ? v.slice(0, 1000) : prev
+}
+
 type Rules = { [K in keyof Settings]-?: (v: unknown, prev: Settings[K]) => Settings[K] }
 
 const RULES: Rules = {
@@ -78,10 +84,11 @@ const RULES: Rules = {
   rightClick: oneOf('copyPaste', 'menu'),
   confirmMultilinePaste: bool,
   bell: oneOf('off', 'visual', 'sound'),
+  localShell: absolutePath,
   showHidden: bool,
   conflictDefault: oneOf('ask', 'keepBoth', 'replace'),
-  // '' means the system's Downloads folder; otherwise an absolute path.
-  downloadDir: (v, prev) => (typeof v === 'string' && (v === '' || /^([a-zA-Z]:[\\/]|\/)/.test(v)) ? v.slice(0, 1000) : prev),
+  // '' means the system's Downloads folder.
+  downloadDir: absolutePath,
   confirmDelete: bool,
   autoReconnect: bool,
   reconnectAttempts: int(RECONNECT_ATTEMPTS),

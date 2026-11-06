@@ -1424,10 +1424,15 @@ code {
   background: var(--hover);
   color: var(--text);
 }
+/* The open section: the text stays light (--accent-text is for text on a solid accent), the icon takes the accent. */
 .settings-nav button.on {
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  background: var(--active);
+  color: var(--text);
   font-weight: 500;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.settings-nav button.on svg {
+  color: var(--accent);
 }
 .settings-body {
   display: flex;
@@ -1701,7 +1706,7 @@ select:disabled {
 }
 .set-shortcuts kbd.recording {
   border-color: var(--accent);
-  color: var(--accent-text);
+  color: var(--accent);
   background: var(--accent-soft);
   animation: pulse 1.2s ease-in-out infinite;
 }
@@ -1749,4 +1754,9 @@ select:disabled {
 /* The terminal bell, when set to flash. */
 .term-area.bell {
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* The local terminal sits above the hosts, a little apart from them. */
+.host-row.local-row {
+  margin-bottom: 6px;
 }

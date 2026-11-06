@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
-import type { Host, HostInput, SessionStatus, Settings } from '@shared/types'
+import { LOCAL_HOST_ID, type Host, type HostInput, type LocalShell, type SessionStatus, type Settings } from '@shared/types'
 import { api, chrome, confirmDialog, dismissDialog, setConflictDefault, showDialog } from './lib'
 import { installShortcutDispatcher, setShortcutOverrides, useShortcuts } from './useShortcuts'
 import { FONT_MAX, FONT_MIN, Sidebar } from './components/Sidebar'
@@ -38,10 +38,12 @@ export function App(): React.JSX.Element {
   const [renameRequest, setRenameRequest] = useState<{ id: string; seq: number } | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [localShells, setLocalShells] = useState<LocalShell[]>([])
 
   useEffect(() => {
     void api.listHosts().then(setHosts)
     void api.getSettings().then(setSettings)
+    void api.listLocalShells().then(setLocalShells)
     const mq = matchMedia('(prefers-color-scheme: dark)')
     const onChange = (): void => setSystemDark(mq.matches)
     mq.addEventListener('change', onChange)
@@ -142,18 +144,28 @@ export function App(): React.JSX.Element {
   )
   useEffect(() => api.onPromptCancel(dismissDialog), [])
 
-  /** Opens a new session tab, at the end or right after `afterId`. */
-  const openHost = useCallback((host: Host, afterId?: string) => {
+  /** Opens a new tab, at the end or right after `afterId`. */
+  const openTab = useCallback((hostId: string, name: string, afterId?: string) => {
     const id = crypto.randomUUID()
     setTabs((ts) => {
-      const same = ts.filter((t) => t.hostId === host.id).length
-      const title = same ? `${host.name} (${same + 1})` : host.name
-      const tab: Tab = { id, hostId: host.id, title, status: 'connecting', attempt: 0, filesOpen: false }
+      // Numbered among tabs of the same name (local terminals may run different shells).
+      const same = ts.filter((t) => t.hostId === hostId && (t.title === name || t.title.startsWith(`${name} (`))).length
+      const title = same ? `${name} (${same + 1})` : name
+      const tab: Tab = { id, hostId, title, status: 'connecting', attempt: 0, filesOpen: false }
       const at = afterId ? ts.findIndex((t) => t.id === afterId) + 1 : 0
       return at > 0 ? [...ts.slice(0, at), tab, ...ts.slice(at)] : [...ts, tab]
     })
     setActiveId(id)
   }, [])
+
+  const openHost = useCallback((host: Host, afterId?: string) => openTab(host.id, host.name, afterId), [openTab])
+
+  /** The shell local terminals run (Settings › Terminal), for their tab titles. */
+  const localShell = localShells.find((s) => s.path.toLowerCase() === settings?.localShell.toLowerCase()) ?? localShells[0]
+  const openLocal = useCallback(
+    (afterId?: string) => openTab(LOCAL_HOST_ID, localShell?.label ?? 'Local', afterId),
+    [openTab, localShell]
+  )
 
   const patchTab = useCallback((id: string, patch: Partial<Tab>) => {
     setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)))
@@ -185,10 +197,11 @@ export function App(): React.JSX.Element {
   const duplicateTab = useCallback(
     (id: string) => {
       const tab = tabs.find((t) => t.id === id)
+      if (tab?.hostId === LOCAL_HOST_ID) return openLocal(id)
       const host = tab && hosts.find((h) => h.id === tab.hostId)
       if (host) openHost(host, id)
     },
-    [tabs, hosts, openHost]
+    [tabs, hosts, openHost, openLocal]
   )
 
   const reconnect = useCallback(
@@ -213,13 +226,15 @@ export function App(): React.JSX.Element {
   /** Shows or hides the active tab's files panel (the focus moves with it, see TerminalView). */
   const toggleFiles = (): void => {
     const tab = tabs.find((t) => t.id === activeId)
-    if (tab) patchTab(tab.id, { filesOpen: !tab.filesOpen })
+    // A local terminal is on this computer already: it has no files panel.
+    if (tab && tab.hostId !== LOCAL_HOST_ID) patchTab(tab.id, { filesOpen: !tab.filesOpen })
   }
 
   const reconnectActive = async (): Promise<void> => {
     const tab = tabs.find((t) => t.id === activeId)
     if (!tab) return
-    if (tab.status === 'connected' && !(await confirmDialog(`Reconnect ${tab.title}?`, 'The shell running in this tab ends.', 'Reconnect'))) return
+    const verb = tab.hostId === LOCAL_HOST_ID ? 'Restart' : 'Reconnect'
+    if (tab.status === 'connected' && !(await confirmDialog(`${verb} ${tab.title}?`, 'The shell running in this tab ends.', verb))) return
     reconnect(tab.id)
   }
 
@@ -247,6 +262,7 @@ export function App(): React.JSX.Element {
       search?.focus()
       search?.select()
     },
+    'tab.local': () => openLocal(),
     'tab.duplicate': () => {
       if (activeId) duplicateTab(activeId)
     },
@@ -280,6 +296,8 @@ export function App(): React.JSX.Element {
         onEdit={(host) => setForm({ host })}
         onNew={(prefill) => setForm({ prefill })}
         onOpenSettings={() => setSettingsOpen(true)}
+        localShell={localShell?.label ?? ''}
+        onOpenLocal={() => openLocal()}
       />
 
       <main className="main">
@@ -296,7 +314,7 @@ export function App(): React.JSX.Element {
             renameRequest={renameRequest}
           />
           <div className="tabbar-actions">
-            {active && (
+            {active && active.hostId !== LOCAL_HOST_ID && (
               <button
                 className={`icon-btn ${active.filesOpen ? 'on' : ''}`}
                 onClick={() => patchTab(active.id, { filesOpen: !active.filesOpen })}
@@ -359,7 +377,13 @@ export function App(): React.JSX.Element {
       )}
       {sheetOpen && <ShortcutSheet overrides={settings.shortcuts} onClose={() => setSheetOpen(false)} />}
       {settingsOpen && (
-        <SettingsWindow settings={settings} appTheme={theme} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />
+        <SettingsWindow
+          settings={settings}
+          appTheme={theme}
+          localShells={localShells}
+          onChange={updateSettings}
+          onClose={() => setSettingsOpen(false)}
+        />
       )}
       <Transfers />
       <DialogHost />

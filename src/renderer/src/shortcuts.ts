@@ -36,6 +36,7 @@ export const SHORTCUTS: ShortcutDef[] = [
     fixed: true
   })),
   { id: 'tab.new', label: 'New connection (search hosts)', scope: 'global', keys: k('Ctrl+Shift+T', 'Cmd+T') },
+  { id: 'tab.local', label: 'New local terminal', scope: 'global', keys: k('Ctrl+Shift+O', 'Cmd+Shift+O') },
   { id: 'tab.duplicate', label: 'Duplicate tab', scope: 'global', keys: k('Ctrl+Shift+D', 'Cmd+Shift+D') },
   { id: 'tab.reconnect', label: 'Reconnect', scope: 'global', keys: k('Ctrl+Shift+R', 'Cmd+Shift+R') },
   { id: 'tab.close', label: 'Close tab', scope: 'global', keys: k('Ctrl+Shift+W', 'Cmd+W') },

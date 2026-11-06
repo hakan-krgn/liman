@@ -5,9 +5,9 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon } from '@xterm/addon-search'
-import { ClipboardPaste, Copy, Eraser, Loader2, RotateCw, Search, TextSelect, Upload, WifiOff } from 'lucide-react'
+import { ClipboardPaste, Copy, Eraser, Loader2, RotateCw, Search, SquareTerminal, TextSelect, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
-import type { ClipContent, Settings } from '@shared/types'
+import { LOCAL_HOST_ID, type ClipContent, type Settings } from '@shared/types'
 import { shQuote } from '@shared/shell'
 import {
   api,
@@ -60,6 +60,8 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
   const live = useRef({ status: tab.status, onReconnect, onZoom, settings, paste: async (): Promise<void> => {}, bell: (): void => {} })
   const lastPasteKey = useRef(0)
   const colors = useMemo(() => terminalTheme(settings.terminalTheme, appTheme), [settings.terminalTheme, appTheme])
+  /** A terminal on this computer rather than on a server. */
+  const isLocal = tab.hostId === LOCAL_HOST_ID
   const [flash, setFlash] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const menuEl = useRef<HTMLDivElement>(null)
@@ -71,7 +73,8 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
     tab,
     onReconnect,
     () => term.current?.write('\x1b[2m[Liman] Reconnected. The previous shell ended with the old connection.\x1b[0m\r\n'),
-    { enabled: settings.autoReconnect, maxAttempts: settings.reconnectAttempts }
+    // A local shell that exits stays exited; it never "drops".
+    { enabled: settings.autoReconnect && !isLocal, maxAttempts: settings.reconnectAttempts }
   )
   // Re-render once a second for the countdown.
   const [, tick] = useState(0)
@@ -100,7 +103,13 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
     const t = term.current
     if (!t) return
     const content: ClipContent = await api.inspectClipboard().catch(() => ({ kind: 'none' }))
-    if (content.kind === 'none') {
+    // Here on this computer, files paste as their paths (as Windows Terminal does).
+    if (isLocal && content.kind === 'files') {
+      t.paste(content.paths.map(quotePath).join(' '))
+      t.focus()
+      return
+    }
+    if (content.kind === 'none' || isLocal) {
       const text = await navigator.clipboard.readText().catch(() => '')
       if (text && (await confirmLines(text))) t.paste(text)
       t.focus()
@@ -219,7 +228,7 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
     overlay.className = 'typeahead'
     t.element!.querySelector('.xterm-screen')!.appendChild(overlay)
     const ta = new TypeAhead(t, (p) => drawPrediction(t, overlay, p))
-    ta.setEnabled(settings.instantTyping)
+    ta.setEnabled(settings.instantTyping && !isLocal)
     typeAhead.current = ta
 
     term.current = t
@@ -351,7 +360,7 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colors, settings.fontFamily, settings.fontSize, settings.lineHeight, settings.cursorStyle, settings.cursorBlink, settings.scrollback])
 
-  useEffect(() => typeAhead.current?.setEnabled(settings.instantTyping), [settings.instantTyping])
+  useEffect(() => typeAhead.current?.setEnabled(settings.instantTyping && !isLocal), [settings.instantTyping, isLocal])
 
   // The right-click menu closes on any click elsewhere, and stays inside the window.
   useEffect(() => {
@@ -407,6 +416,8 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
 
   /** Local files, or remote files dragged from another server's files panel. */
   const accepts = (e: React.DragEvent): boolean => {
+    // Locally a dropped file is already here: its path is typed in instead.
+    if (isLocal) return hasFiles(e) && !remoteDragOf(e)
     const drag = remoteDragOf(e)
     // Files from this very server have nowhere to go in its own terminal.
     return drag ? drag.sessionId !== sessionId.current : hasFiles(e)
@@ -417,7 +428,7 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
     e.preventDefault()
     if (++dragDepth.current > 1) return
     setDrop({ remote: !!remoteDragOf(e) })
-    if (connected) {
+    if (connected && !isLocal) {
       api
         .getCwd(sessionId.current)
         .then((dir) => setDrop((d) => (d ? { ...d, dir } : d)))
@@ -442,6 +453,11 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
     dragDepth.current = 0
     setDrop(null)
     if (!connected) return
+    if (isLocal) {
+      term.current?.paste(droppedPaths(e).map(quotePath).join(' '))
+      term.current?.focus()
+      return
+    }
     const drag = remoteDragOf(e, true)
     if (drag) setRemoteDrag(null)
     const work = drag
@@ -510,15 +526,15 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
         {!retry && (tab.status === 'closed' || tab.status === 'error') && (
           <div className="disconnected">
             <div className="card">
-              <WifiOff size={22} />
-              <h3>{tab.status === 'error' ? "Couldn't connect" : 'Disconnected'}</h3>
+              {isLocal ? <SquareTerminal size={22} /> : <WifiOff size={22} />}
+              <h3>{isLocal ? (tab.status === 'error' ? "Couldn't start the shell" : 'The shell has exited') : tab.status === 'error' ? "Couldn't connect" : 'Disconnected'}</h3>
               {tab.message && <p>{tab.message}</p>}
               <div className="row">
                 <button className="btn ghost" onClick={onClose}>
                   Close tab
                 </button>
                 <button className="btn primary" onClick={onReconnect}>
-                  <RotateCw size={14} /> Reconnect
+                  <RotateCw size={14} /> {isLocal ? 'Restart' : 'Reconnect'}
                 </button>
               </div>
               <span className="hint">or press Enter</span>
@@ -532,8 +548,8 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
               <Upload size={22} />
               {connected ? (
                 <>
-                  <strong>{drop.remote ? 'Drop to copy here' : 'Drop to upload'}</strong>
-                  <code>{drop.dir ?? 'finding current folder…'}</code>
+                  <strong>{isLocal ? 'Drop to type the paths' : drop.remote ? 'Drop to copy here' : 'Drop to upload'}</strong>
+                  {!isLocal && <code>{drop.dir ?? 'finding current folder…'}</code>}
                 </>
               ) : (
                 <strong>Not connected</strong>
@@ -543,7 +559,7 @@ export function TerminalView({ tab, active, appTheme, settings, onSession, onRec
         )}
       </div>
 
-      {tab.filesOpen && (
+      {tab.filesOpen && !isLocal && (
         <SftpPanel
           sessionId={tab.sessionId}
           connected={connected}
@@ -617,4 +633,10 @@ function beep(): void {
   tone.connect(gain).connect(audio.destination)
   tone.start()
   tone.stop(audio.currentTime + 0.13)
+}
+
+/** A local path to type into a shell: quoted when it has spaces or shell characters. */
+function quotePath(path: string): string {
+  if (!/[\s'"&()$;`|<>*?!#~%^]/.test(path)) return path
+  return api.platform === 'win32' ? `"${path}"` : shQuote(path)
 }

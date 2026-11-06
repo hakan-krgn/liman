@@ -29,6 +29,7 @@
   "dependencies": {
     "@xterm/addon-search": "^0.16.0",
     "electron-updater": "^6.8.9",
+    "node-pty": "1.1.0",
     "ssh2": "^1.17.0"
   },
   "devDependencies": {

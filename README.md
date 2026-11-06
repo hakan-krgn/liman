@@ -40,6 +40,7 @@ Drag anything from your desktop onto a terminal: Liman finds the folder that she
 
 ## Features
 
+- **Local terminal:** *Local terminal* at the top of the host list (or Ctrl+Shift+O / ⌘⇧O) opens a terminal on your own computer, in tabs next to your servers. It runs your usual shell (PowerShell 7 or Windows PowerShell on Windows, your login shell on macOS); pick another one, such as Command Prompt, Git Bash or WSL, in *Settings › Terminal*. Files dropped or pasted into it are typed in as their paths.
 - **Drag-and-drop uploads:** Drop files or folders from the desktop, Explorer or Finder onto a terminal and they are uploaded to whatever directory that terminal is currently in. The target directory is shown before you drop.
 - **SFTP panel:** Browse folders, drop onto a folder to upload into it, double-click to download (to your Downloads folder), rename, delete, create folders, and jump to the terminal's current directory.
 - **Drag-and-drop downloads:** Drag files or folders out of the SFTP panel onto the desktop or an Explorer / Finder window and they are downloaded right where you drop them. On macOS, Liman asks once for permission to see which Finder windows are open.
@@ -94,6 +95,7 @@ On Windows and Linux the terminal sends Ctrl+letter keys to the shell (Ctrl+W de
 | Previous tab | `Ctrl+Shift+Tab` | `⌃⇧Tab` |
 | Go to tab 1–9 | `Ctrl+1…9` | `⌘1…9` |
 | New connection (search hosts) | `Ctrl+Shift+T` | `⌘T` |
+| New local terminal | `Ctrl+Shift+O` | `⇧⌘O` |
 | Duplicate tab | `Ctrl+Shift+D` | `⇧⌘D` |
 | Reconnect | `Ctrl+Shift+R` | `⇧⌘R` |
 | Close tab | `Ctrl+Shift+W` | `⌘W` |

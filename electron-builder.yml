@@ -13,11 +13,19 @@ directories:
 files:
   - out/**
   - package.json
-# The renderer is fully bundled by Vite; only ssh2 ships as a runtime dependency,
-# and it falls back to pure JS when its optional native addon isn't built.
+  # node-pty only needs lib/ and its prebuilt binaries at runtime.
+  - "!node_modules/node-pty/{src,deps,scripts,third_party,typings,build}/**"
+  - "!node_modules/node-pty/**/*.pdb"
+# The renderer is fully bundled by Vite; ssh2 and node-pty ship as runtime
+# dependencies. ssh2 falls back to pure JS without its optional native addon;
+# node-pty brings prebuilt Node-API binaries that need no rebuild for Electron.
 npmRebuild: false
 asarUnpack:
   - "**/*.node"
+  # Local terminals: ConPTY (conpty.dll, OpenConsole.exe) and macOS's spawn-helper run from disk.
+  - "node_modules/node-pty/**"
+# npm ships node-pty's spawn-helper without the executable bit.
+afterPack: build/after-pack.cjs
 # Lock down the packaged binary so it can't be reused to run arbitrary code
 # (and decrypt saved passwords) via ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect.
 electronFuses:
@@ -58,6 +66,8 @@ mac:
   # Developer ID identity (and enable hardenedRuntime + notarization) for public releases.
   identity: "-"
   hardenedRuntime: false
+  # node-pty brings both Mac builds; the universal app keeps them as they are.
+  x64ArchFiles: "**/node_modules/node-pty/prebuilds/**"
   artifactName: ${productName}-${version}-mac-universal.${ext}
 
 # Drag-to-Applications disk image.

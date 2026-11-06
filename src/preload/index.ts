@@ -5,6 +5,7 @@ import type {
   ConflictMode,
   Host,
   HostInput,
+  LocalShell,
   PromptRequest,
   PromptResponse,
   RemoteEntry,
@@ -52,6 +53,8 @@ const api = {
     ipcRenderer.send('ssh:resize', sessionId, cols, rows),
   disconnect: (sessionId: string): void => ipcRenderer.send('ssh:disconnect', sessionId),
   getCwd: (sessionId: string): Promise<string> => ipcRenderer.invoke('ssh:cwd', sessionId),
+  /** Shells for local terminals, this computer's usual one first. */
+  listLocalShells: (): Promise<LocalShell[]> => ipcRenderer.invoke('local:shells'),
   onData: (cb: (sessionId: string, data: Uint8Array) => void) => on('ssh:data', cb),
   onStatus: (cb: (e: SessionStatusEvent) => void) => on('ssh:status', cb),
 

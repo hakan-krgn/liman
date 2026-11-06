@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react'
 import { Download, FolderOpen, Keyboard, Network, Palette, RotateCcw, SquareTerminal, X, type LucideIcon } from 'lucide-react'
-import type { Settings } from '@shared/types'
+import type { LocalShell, Settings } from '@shared/types'
 import { DEFAULT_SETTINGS, FONT_SIZE } from '@shared/settings'
 import { api, isMac } from '../lib'
 import { TERMINAL_THEME_LIST, terminalTheme } from '../themes'
@@ -36,7 +36,7 @@ const SECTIONS: { id: Section; title: string; icon: LucideIcon; keys: (keyof Set
     id: 'terminal',
     title: 'Terminal',
     icon: SquareTerminal,
-    keys: ['scrollback', 'instantTyping', 'copyOnSelect', 'rightClick', 'confirmMultilinePaste', 'bell']
+    keys: ['scrollback', 'instantTyping', 'copyOnSelect', 'rightClick', 'confirmMultilinePaste', 'bell', 'localShell']
   },
   { id: 'files', title: 'Files', icon: FolderOpen, keys: ['showHidden', 'conflictDefault', 'downloadDir', 'confirmDelete'] },
   {
@@ -52,12 +52,14 @@ const SECTIONS: { id: Section; title: string; icon: LucideIcon; keys: (keyof Set
 interface Props {
   settings: Settings
   appTheme: 'light' | 'dark'
+  /** Shells for local terminals, this computer's usual one first. */
+  localShells: LocalShell[]
   onChange(patch: Partial<Settings>): void
   onClose(): void
 }
 
 /** Settings: a window with the sections on the left. Changes apply (and are saved) at once. */
-export function SettingsWindow({ settings, appTheme, onChange, onClose }: Props): React.JSX.Element {
+export function SettingsWindow({ settings, appTheme, localShells, onChange, onClose }: Props): React.JSX.Element {
   const [section, setSection] = useState<Section>('appearance')
   const current = SECTIONS.find((s) => s.id === section)!
 
@@ -99,7 +101,7 @@ export function SettingsWindow({ settings, appTheme, onChange, onClose }: Props)
           </div>
           <div className="settings-content">
             {section === 'appearance' && <Appearance settings={settings} appTheme={appTheme} onChange={onChange} />}
-            {section === 'terminal' && <TerminalSection settings={settings} onChange={onChange} />}
+            {section === 'terminal' && <TerminalSection settings={settings} shells={localShells} onChange={onChange} />}
             {section === 'files' && <FilesSection settings={settings} onChange={onChange} />}
             {section === 'connection' && <ConnectionSection settings={settings} onChange={onChange} />}
             {section === 'shortcuts' && <ShortcutsSection settings={settings} onChange={onChange} />}
@@ -235,9 +237,21 @@ function Appearance({ settings: s, appTheme, onChange }: SectionProps & { appThe
   )
 }
 
-function TerminalSection({ settings: s, onChange }: SectionProps): React.JSX.Element {
+function TerminalSection({ settings: s, shells, onChange }: SectionProps & { shells: LocalShell[] }): React.JSX.Element {
+  // A shell chosen earlier that this computer no longer has falls back to the usual one.
+  const chosen = shells.some((sh) => sh.path.toLowerCase() === s.localShell.toLowerCase()) ? s.localShell : ''
   return (
     <>
+      <Row label="Local shell" hint="What a local terminal runs (Local terminal in the sidebar).">
+        <select value={chosen} onChange={(e) => onChange({ localShell: e.target.value })}>
+          <option value="">Usual{shells[0] ? ` (${shells[0].label})` : ''}</option>
+          {shells.map((sh) => (
+            <option key={sh.path} value={sh.path}>
+              {sh.label}
+            </option>
+          ))}
+        </select>
+      </Row>
       <Row label="Scrollback" hint="Lines kept to scroll back through.">
         <select value={s.scrollback} onChange={(e) => onChange({ scrollback: Number(e.target.value) })}>
           {[1_000, 5_000, 10_000, 50_000, 100_000].map((n) => (

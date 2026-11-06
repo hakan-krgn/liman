@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronRight, GripVertical, Minus, Pencil, Plus, Search, Server, Settings as Gear } from 'lucide-react'
+import { ChevronRight, GripVertical, Laptop, Minus, Pencil, Plus, Search, Server, Settings as Gear } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
-import type { Host, HostInput, Settings } from '@shared/types'
+import { LOCAL_HOST_ID, type Host, type HostInput, type Settings } from '@shared/types'
 import { groupOf, moveGroupIn, moveHostIn } from '@shared/order'
 import { parseTarget } from '@shared/target'
 import { api, confirmDialog, errorMessage, showDialog } from '../lib'
@@ -23,6 +23,9 @@ interface Props {
   onEdit(host: Host): void
   onNew(prefill?: Partial<HostInput>): void
   onOpenSettings(): void
+  /** The shell local terminals run, e.g. "PowerShell 7". */
+  localShell: string
+  onOpenLocal(): void
 }
 
 
@@ -189,6 +192,25 @@ export function Sidebar(p: Props): React.JSX.Element {
       </div>
 
       <nav className="host-list" ref={listEl} onKeyDown={onListKey}>
+        {(!searching || `local terminal ${p.localShell}`.toLowerCase().includes(query.trim().toLowerCase())) && (
+          <div
+            className="host-row local-row"
+            role="button"
+            tabIndex={0}
+            onClick={p.onOpenLocal}
+            onKeyDown={(e) => e.key === 'Enter' && p.onOpenLocal()}
+            title={`A terminal on this computer (${keyHint('tab.local')})`}
+          >
+            <span className="host-icon">
+              <Laptop size={14} />
+              {p.connected.has(LOCAL_HOST_ID) && <span className="live" />}
+            </span>
+            <span className="host-text">
+              <span className="host-name">Local terminal</span>
+              <span className="host-sub">{p.localShell || 'This computer'}</span>
+            </span>
+          </div>
+        )}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}

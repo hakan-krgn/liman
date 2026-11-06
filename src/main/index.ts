@@ -10,7 +10,8 @@ import { Updater } from './updater'
 import { DragOut } from './dragout'
 import { ClipOut } from './clipout'
 import { removeOldStandIns } from './standins'
-import type { ClipEntry, ConflictMode, HostInput, PromptResponse, SessionStatusEvent, Settings } from '@shared/types'
+import { findShells, LocalTerminals } from './localterm'
+import { LOCAL_HOST_ID, type ClipEntry, type ConflictMode, type HostInput, type PromptResponse, type SessionStatusEvent, type Settings } from '@shared/types'
 
 // Development-only switches; a packaged build ignores them so nobody can point
 // the app at another renderer or profile through the environment.
@@ -77,6 +78,11 @@ async function downloadOverStandIns(sessionId: string, remotes: string[], target
   await sessions.download(sessionId, remotes, downloadsDir(), targets)
 }
 const dragOut = new DragOut(downloadOverStandIns, (line) => writeLog(line))
+/** Terminals on this computer; they report like SSH sessions. */
+const local = new LocalTerminals(
+  (channel, ...args) => win && !win.isDestroyed() && win.webContents.send(channel, ...args),
+  () => store.getSettings().localShell
+)
 const clipOut = new ClipOut({ download: downloadOverStandIns, log: writeLog })
 
 const updater = new Updater((status) => {
@@ -122,6 +128,7 @@ function createWindow(): void {
   win.webContents.on('did-start-loading', () => {
     resolvePrompts(() => true)
     sessions.disconnectAll()
+    local.closeAll()
   })
   // Pastes into Explorer / Finder happen while Liman is in the background.
   win.on('focus', () => clipOut.setFocused(true))
@@ -129,6 +136,7 @@ function createWindow(): void {
   win.on('closed', () => {
     resolvePrompts(() => true)
     sessions.disconnectAll()
+    local.closeAll()
     win = null
   })
 
@@ -219,10 +227,20 @@ function registerIpc(): void {
     p.resolve(res === true || (Array.isArray(res) && res.every((x) => typeof x === 'string')) ? (res as PromptResponse) : null)
   })
 
-  on('ssh:connect', (sessionId, hostId, cols, rows) => sessions.connect(str(sessionId), str(hostId), int(cols), int(rows)))
-  on('ssh:write', (sessionId, data) => sessions.write(str(sessionId), str(data)))
-  on('ssh:resize', (sessionId, cols, rows) => sessions.resize(str(sessionId), int(cols), int(rows)))
-  on('ssh:disconnect', (sessionId) => sessions.disconnect(str(sessionId)))
+  // A tab on LOCAL_HOST_ID is a terminal on this computer; everything else is SSH.
+  on('ssh:connect', (sessionId, hostId, cols, rows) =>
+    hostId === LOCAL_HOST_ID
+      ? void local.open(str(sessionId), int(cols), int(rows))
+      : sessions.connect(str(sessionId), str(hostId), int(cols), int(rows))
+  )
+  on('ssh:write', (sessionId, data) =>
+    local.has(str(sessionId)) ? local.write(str(sessionId), str(data)) : sessions.write(str(sessionId), str(data))
+  )
+  on('ssh:resize', (sessionId, cols, rows) =>
+    local.has(str(sessionId)) ? local.resize(str(sessionId), int(cols), int(rows)) : sessions.resize(str(sessionId), int(cols), int(rows))
+  )
+  on('ssh:disconnect', (sessionId) => (local.has(str(sessionId)) ? local.close(str(sessionId)) : sessions.disconnect(str(sessionId))))
+  handle('local:shells', () => findShells())
   handle('ssh:cwd', (sessionId) => sessions.getCwd(str(sessionId)))
 
   handle('sftp:list', (sessionId, dir) => sessions.list(str(sessionId), str(dir)))

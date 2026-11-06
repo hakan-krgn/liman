@@ -24,6 +24,17 @@ export interface HostInput extends Omit<Host, 'id' | 'hasPassword' | 'hasPassphr
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
+/** The host id of a tab with a terminal on this computer instead of a server. */
+export const LOCAL_HOST_ID = 'local'
+
+/** A shell this computer can run in a local terminal. */
+export interface LocalShell {
+  path: string
+  args: string[]
+  /** "PowerShell 7", "Git Bash", "zsh", … */
+  label: string
+}
+
 /** Everything the Settings window changes (defaults and rules: shared/settings.ts). */
 export interface Settings {
   // Appearance
@@ -48,6 +59,8 @@ export interface Settings {
   /** Ask before pasting several lines (each line would run as a command). */
   confirmMultilinePaste: boolean
   bell: 'off' | 'visual' | 'sound'
+  /** The shell of local terminals (its path); '' is this computer's usual one. */
+  localShell: string
 
   // Files
   showHidden: boolean
