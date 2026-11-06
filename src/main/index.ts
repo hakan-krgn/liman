@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, session, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -65,10 +65,16 @@ const sessions = new SessionManager({
   }
 })
 
+/** Where downloads go: the folder chosen in Settings while it exists, otherwise Downloads. */
+function downloadsDir(): string {
+  const chosen = store.getSettings().downloadDir
+  return chosen && existsSync(chosen) ? chosen : app.getPath('downloads')
+}
+
 /** Downloads remote entries over the stand-ins that were dropped or pasted for them. */
 async function downloadOverStandIns(sessionId: string, remotes: string[], targets: string[]): Promise<void> {
   for (const t of targets) revealable.add(t)
-  await sessions.download(sessionId, remotes, app.getPath('downloads'), targets)
+  await sessions.download(sessionId, remotes, downloadsDir(), targets)
 }
 const dragOut = new DragOut(downloadOverStandIns, (line) => writeLog(line))
 const clipOut = new ClipOut({ download: downloadOverStandIns, log: writeLog })
@@ -190,7 +196,18 @@ function registerIpc(): void {
   handle('hosts:moveGroup', (group, before) => store.moveGroup(str(group), before === null ? null : str(before)))
 
   handle('settings:get', () => store.getSettings())
-  handle('settings:set', (patch) => store.setSettings(patch as Partial<Settings>))
+  handle('settings:set', (patch) => {
+    const next = store.setSettings(patch as Partial<Settings>)
+    updater.setAutoDownload(next.autoUpdate)
+    return next
+  })
+  handle('app:info', () => ({ version: app.getVersion(), packaged: app.isPackaged }))
+  handle('update:check', () => updater.checkNow())
+  on('shell:openLogs', () => void shell.openPath(app.getPath('logs')))
+  handle('dialog:pickFolder', async () => {
+    const res = await dialog.showOpenDialog(win!, { title: 'Choose a folder for downloads', properties: ['openDirectory', 'createDirectory'] })
+    return res.canceled ? null : (res.filePaths[0] ?? null)
+  })
   handle('window:titlebar', (bg, fg) => {
     if (process.platform !== 'darwin' && win) win.setTitleBarOverlay({ color: color(bg), symbolColor: color(fg) })
   })
@@ -219,7 +236,7 @@ function registerIpc(): void {
     sessions.upload(str(sessionId), strs(paths), str(dir), mode === 'keepBoth' ? 'keepBoth' : ('replace' satisfies ConflictMode))
   )
   handle('sftp:download', async (sessionId, paths) => {
-    const target = await sessions.download(str(sessionId), strs(paths), app.getPath('downloads'))
+    const target = await sessions.download(str(sessionId), strs(paths), downloadsDir())
     if (target) revealable.add(target)
   })
   handle('sftp:prepareCopy', (sessionId, names, dir) =>
@@ -290,7 +307,23 @@ function setupMenu(): void {
   if (process.platform !== 'darwin') return Menu.setApplicationMenu(null)
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
-      { role: 'appMenu' },
+      {
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          // ⌘, reaches the page first and opens Settings there; this is for the menu itself.
+          { label: 'Settings…', accelerator: 'Cmd+,', click: () => win?.webContents.send('menu:settings') },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' }
+        ]
+      },
       { role: 'editMenu' },
       {
         label: 'View',
@@ -339,6 +372,7 @@ app.whenReady().then(() => {
   setupPermissions()
   registerIpc()
   createWindow()
+  updater.setAutoDownload(store.getSettings().autoUpdate)
   updater.start()
   void removeOldStandIns()
   app.on('activate', () => {

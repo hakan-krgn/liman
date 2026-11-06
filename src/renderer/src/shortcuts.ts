@@ -48,6 +48,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'zoom.out', label: 'Smaller text', scope: 'global', keys: k('Ctrl+-', 'Cmd+-') },
   { id: 'zoom.reset', label: 'Default text size', scope: 'global', keys: k('Ctrl+0', 'Cmd+0') },
   { id: 'help.shortcuts', label: 'Keyboard shortcuts', scope: 'global', keys: k('F1', 'F1') },
+  { id: 'app.settings', label: 'Settings', scope: 'global', keys: k('Ctrl+,', 'Cmd+,') },
 
   // -------------------------------------------------------------- terminal
   { id: 'terminal.copy', label: 'Copy the selection', scope: 'terminal', keys: k(['Ctrl+Shift+C', 'Ctrl+C'], 'Cmd+C') },

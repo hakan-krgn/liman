@@ -77,7 +77,12 @@ interface ActiveTransfer extends Transfer {
   channels: { end(): void }[]
 }
 
-const CONNECT_TIMEOUT = 20_000
+/** Timing the user can change in Settings › Connection, read at each connect. */
+function timing(): { timeout: number; keepaliveInterval: number; keepaliveCountMax: number } {
+  const s = store.getSettings()
+  // ssh2 sends no keepalives at an interval of 0.
+  return { timeout: s.connectTimeoutSeconds * 1000, keepaliveInterval: s.keepaliveSeconds * 1000, keepaliveCountMax: 4 }
+}
 /** The transfer connection is closed after this long without transfers. */
 const TRANSFER_IDLE = 120_000
 /** How long the bootstrap may take to report its PID before we stop waiting for it. */
@@ -185,7 +190,7 @@ export class SessionManager {
       timer = setTimeout(() => {
         fail('Connection timed out')
         client.destroy()
-      }, CONNECT_TIMEOUT)
+      }, timing().timeout)
     }
     const ask = async (req: PromptRequest): Promise<PromptResponse> => {
       clearTimeout(timer)
@@ -255,8 +260,8 @@ export class SessionManager {
         port: host.port,
         username: host.username,
         readyTimeout: 0,
-        keepaliveInterval: 15_000,
-        keepaliveCountMax: 4,
+        keepaliveInterval: timing().keepaliveInterval,
+        keepaliveCountMax: timing().keepaliveCountMax,
         tryKeyboard: true,
         hostVerifier: (key: Buffer, verify: (ok: boolean) => void) => {
           const value = hostKeyId(key)
@@ -1174,7 +1179,7 @@ export class SessionManager {
         }
         resolve(ok ? c : null)
       }
-      const timer = setTimeout(() => settle(false), CONNECT_TIMEOUT)
+      const timer = setTimeout(() => settle(false), timing().timeout)
       c.on('ready', () => {
         c.setNoDelay(true)
         settle(true)
@@ -1200,8 +1205,8 @@ export class SessionManager {
           port: login.port,
           username: login.username,
           readyTimeout: 0,
-          keepaliveInterval: 15_000,
-          keepaliveCountMax: 4,
+          keepaliveInterval: timing().keepaliveInterval,
+          keepaliveCountMax: timing().keepaliveCountMax,
           // Never talk to a different server than the one the user verified.
           hostVerifier: (key: Buffer) => hostKeyId(key) === login.hostKey,
           authHandler: (_left: unknown, _partial: unknown, next: NextAuthHandler) => {

@@ -31,7 +31,7 @@ export function UpdateNotice(): React.JSX.Element | null {
     <button
       className="update-notice ready"
       onClick={() => (ready ? api.installUpdate() : api.openUpdate())}
-      title={ready ? 'Restart Liman to finish updating' : 'Open the download page'}
+      title={ready ? 'Restart Liman to finish updating' : 'Get the new version'}
     >
       {ready ? <RotateCw size={15} /> : <ArrowDownToLine size={15} />}
       <span className="update-text">

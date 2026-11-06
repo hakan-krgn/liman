@@ -1,4 +1,3 @@
-import type { ITheme } from '@xterm/xterm'
 import type { ConflictMode, RemoteEntry } from '@shared/types'
 import type { DragEvent, ReactNode } from 'react'
 
@@ -142,9 +141,17 @@ export async function textDialog(title: string, value: string, okLabel = 'Save')
 
 // ------------------------------------------------------------------ uploads
 
-/** Asks what to do about name clashes; null when the user cancels. */
+let conflictDefault: 'ask' | ConflictMode = 'ask'
+
+/** Settings › Files: what happens to name clashes without asking ('ask' asks). */
+export function setConflictDefault(mode: 'ask' | ConflictMode): void {
+  conflictDefault = mode
+}
+
+/** Asks what to do about name clashes (unless Settings say); null when the user cancels. */
 export async function askConflicts(prep: { dir: string; conflicts: string[] }): Promise<ConflictMode | null> {
   if (!prep.conflicts.length) return 'replace'
+  if (conflictDefault !== 'ask') return conflictDefault
   const what = prep.conflicts.length === 1 ? `“${prep.conflicts[0]}” already exists` : `${prep.conflicts.length} items already exist`
   const r = await showDialog({
     title: 'Replace existing files?',
@@ -264,55 +271,6 @@ export function formatDate(sec: number): string {
 }
 
 // ------------------------------------------------------------------ themes
-
-export const terminalThemes: Record<'light' | 'dark', ITheme> = {
-  light: {
-    background: '#ffffff',
-    foreground: '#24292f',
-    cursor: '#24292f',
-    cursorAccent: '#ffffff',
-    selectionBackground: 'rgba(9, 105, 218, 0.22)',
-    black: '#24292f',
-    red: '#cf222e',
-    green: '#116329',
-    yellow: '#7d4e00',
-    blue: '#0969da',
-    magenta: '#8250df',
-    cyan: '#1b7c83',
-    white: '#6e7781',
-    brightBlack: '#57606a',
-    brightRed: '#a40e26',
-    brightGreen: '#1a7f37',
-    brightYellow: '#633c01',
-    brightBlue: '#218bff',
-    brightMagenta: '#a475f9',
-    brightCyan: '#3192aa',
-    brightWhite: '#8c959f'
-  },
-  dark: {
-    background: '#141517',
-    foreground: '#e3e4e8',
-    cursor: '#e3e4e8',
-    cursorAccent: '#141517',
-    selectionBackground: 'rgba(124, 140, 255, 0.32)',
-    black: '#3f4451',
-    red: '#e06c75',
-    green: '#98c379',
-    yellow: '#e5c07b',
-    blue: '#61afef',
-    magenta: '#c678dd',
-    cyan: '#56b6c2',
-    white: '#d7dae0',
-    brightBlack: '#5c6370',
-    brightRed: '#ff7b86',
-    brightGreen: '#b1e18b',
-    brightYellow: '#efd089',
-    brightBlue: '#67cdff',
-    brightMagenta: '#e48bff',
-    brightCyan: '#63d4e0',
-    brightWhite: '#ffffff'
-  }
-}
 
 /** Window chrome colours, mirrored from styles.css, for the native title bar overlay. */
 export const chrome = {

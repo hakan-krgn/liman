@@ -55,6 +55,9 @@ interface Props {
   sessionId?: string
   connected: boolean
   peers: Peer[]
+  /** Settings › Files. */
+  showHidden: boolean
+  confirmDelete: boolean
   onClose(): void
   /** Takes the terminal's shell to this folder. */
   onCdHere(dir: string): void
@@ -67,7 +70,7 @@ const ROW_HEIGHT = 34
 /** Folders remembered for Back / Forward. */
 const HISTORY = 100
 
-export function SftpPanel({ sessionId, connected, peers, onClose, onCdHere }: Props): React.JSX.Element {
+export function SftpPanel({ sessionId, connected, peers, showHidden, confirmDelete, onClose, onCdHere }: Props): React.JSX.Element {
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<RemoteEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -96,7 +99,9 @@ export function SftpPanel({ sessionId, connected, peers, onClose, onCdHere }: Pr
   const typed = useRef({ text: '', at: 0 })
   const cutPaths = useCutPaths(sessionId)
 
-  const visible = filter ? entries.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase())) : entries
+  const visible = entries.filter(
+    (e) => (showHidden || !e.name.startsWith('.')) && (!filter || e.name.toLowerCase().includes(filter.toLowerCase()))
+  )
 
   const fail = (e: unknown): void => {
     void showDialog({
@@ -223,7 +228,7 @@ export function SftpPanel({ sessionId, connected, peers, onClose, onCdHere }: Pr
   const remove = async (items: RemoteEntry[]): Promise<void> => {
     if (!sessionId || !items.length) return
     const what = items.length === 1 ? `“${items[0].name}”` : `${items.length} items`
-    if (!(await confirmDialog(`Delete ${what}?`, 'This cannot be undone.', 'Delete', true))) return
+    if (confirmDelete && !(await confirmDialog(`Delete ${what}?`, 'This cannot be undone.', 'Delete', true))) return
     try {
       await api.remove(sessionId, items.map((i) => i.path))
     } catch (e) {
@@ -638,7 +643,9 @@ export function SftpPanel({ sessionId, connected, peers, onClose, onCdHere }: Pr
         {!connected && <div className="sftp-empty">Not connected</div>}
         {connected && error && <div className="sftp-empty error">{error}</div>}
         {connected && !error && entries.length === 0 && !loading && <div className="sftp-empty">Empty folder</div>}
-        {connected && !error && entries.length > 0 && visible.length === 0 && <div className="sftp-empty">No matches</div>}
+        {connected && !error && entries.length > 0 && visible.length === 0 && (
+          <div className="sftp-empty">{filter ? 'No matches' : 'Only hidden files (Settings › Files)'}</div>
+        )}
         {visible.map((item) => (
           <div
             key={item.path}

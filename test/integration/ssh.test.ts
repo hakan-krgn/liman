@@ -26,13 +26,17 @@ const state = vi.hoisted(() => ({
   hosts: new Map<string, Record<string, unknown>>(),
   known: new Map<string, string>()
 }))
-vi.mock('../../src/main/store', () => ({
-  store: {
-    getHostSecrets: (id: string) => state.hosts.get(id),
-    getKnownHost: (key: string) => state.known.get(key),
-    setKnownHost: (key: string, value: string) => void state.known.set(key, value)
+vi.mock('../../src/main/store', async () => {
+  const { DEFAULT_SETTINGS } = await import('../../src/shared/settings')
+  return {
+    store: {
+      getSettings: () => DEFAULT_SETTINGS,
+      getHostSecrets: (id: string) => state.hosts.get(id),
+      getKnownHost: (key: string) => state.known.get(key),
+      setKnownHost: (key: string, value: string) => void state.known.set(key, value)
+    }
   }
-}))
+})
 
 function addHost(id: string, extra: Record<string, unknown> = {}): string {
   state.hosts.set(id, {

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun, Zap } from 'lucide-react'
+import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Settings as Gear, Sun, Zap } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
@@ -8,7 +8,7 @@ import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
 import { groupOf, moveGroupIn, moveHostIn } from '@shared/order'
 import { parseTarget } from '@shared/target'
 import { api, confirmDialog, errorMessage, showDialog } from '../lib'
-import { useShortcuts } from '../useShortcuts'
+import { keyHint, useShortcuts } from '../useShortcuts'
 import { Logo } from './Logo'
 import { UpdateNotice } from './UpdateNotice'
 
@@ -24,6 +24,7 @@ interface Props {
   onConnect(host: Host): void
   onEdit(host: Host): void
   onNew(prefill?: Partial<HostInput>): void
+  onOpenSettings(): void
 }
 
 const nextTheme: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' }
@@ -265,6 +266,9 @@ export function Sidebar(p: Props): React.JSX.Element {
               }
             >
               <Zap size={16} />
+            </button>
+            <button className="icon-btn" onClick={p.onOpenSettings} title={`Settings (${keyHint('app.settings')})`}>
+              <Gear size={16} />
             </button>
           </div>
           <div className="font-stepper" title="Terminal font size (Ctrl + scroll)">

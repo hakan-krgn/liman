@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path'
 import type { Host, HostInput, Settings } from '@shared/types'
 import { moveGroupIn, moveHostIn } from '@shared/order'
+import { DEFAULT_SETTINGS, mergeSettings } from '@shared/settings'
 
 interface StoredHost extends Omit<Host, 'hasPassword' | 'hasPassphrase'> {
   password?: string // encrypted, base64
@@ -21,7 +22,7 @@ interface StoreData {
 
 const defaults: StoreData = {
   hosts: [],
-  settings: { theme: 'system', fontSize: 14, instantTyping: true, collapsedGroups: [] },
+  settings: DEFAULT_SETTINGS,
   knownHosts: {}
 }
 
@@ -35,7 +36,8 @@ function load(): StoreData {
   file = join(dir, 'liman.json')
   try {
     const raw = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
-    data = { ...defaults, ...raw, settings: { ...defaults.settings, ...raw.settings } }
+    // Older files lack newer settings, and a hand-edited one may hold bad values.
+    data = { ...defaults, ...raw, settings: mergeSettings(DEFAULT_SETTINGS, raw.settings ?? {}) }
     if (!data.ordered) {
       // The sidebar used to sort by group and name; keep that look as the starting order.
       data.hosts.sort((a, b) => groupKey(a).localeCompare(groupKey(b)) || a.name.localeCompare(b.name))
@@ -166,14 +168,8 @@ export const store = {
 
   setSettings(patch: Partial<Settings>): Settings {
     const d = load()
-    const next = { ...d.settings, ...patch }
     // Only well-formed values reach the file.
-    if (!['system', 'light', 'dark'].includes(next.theme)) next.theme = d.settings.theme
-    next.fontSize = Math.min(32, Math.max(8, Math.round(Number(next.fontSize)) || 14))
-    next.instantTyping = next.instantTyping !== false
-    if (next.shortcuts !== undefined) next.shortcuts = cleanShortcuts(next.shortcuts)
-    next.collapsedGroups = Array.isArray(next.collapsedGroups) ? next.collapsedGroups.filter((g) => typeof g === 'string') : []
-    d.settings = next
+    d.settings = mergeSettings(d.settings, patch)
     save()
     return d.settings
   },
@@ -186,15 +182,4 @@ export const store = {
     load().knownHosts[key] = value
     save()
   }
-}
-
-/** Changed keys from the renderer: short action ids mapping to a few short chord strings. */
-function cleanShortcuts(v: unknown): Record<string, string[]> {
-  const out: Record<string, string[]> = {}
-  if (!v || typeof v !== 'object') return out
-  for (const [id, keys] of Object.entries(v).slice(0, 200)) {
-    if (!/^[a-z][a-zA-Z0-9.]{0,40}$/.test(id) || !Array.isArray(keys)) continue
-    out[id] = keys.filter((k): k is string => typeof k === 'string' && k.length <= 40).slice(0, 4)
-  }
-  return out
 }

@@ -1387,3 +1387,285 @@ code {
 .sftp-row[draggable='true'] {
   cursor: default;
 }
+
+/* --------------------------------------------------------------- settings */
+
+.modal.settings {
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
+  width: min(820px, calc(100vw - 32px));
+  height: min(620px, calc(100vh - 64px));
+  overflow: hidden;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  flex-shrink: 0;
+  padding: 20px 10px;
+  background: var(--chrome);
+  border-right: 1px solid var(--border);
+}
+.settings-nav h2 {
+  margin: 0 10px 14px;
+  font-size: 16px;
+}
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-nav button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.settings-nav button.on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 8px 24px;
+}
+.settings-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 24px 16px;
+}
+.settings-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.set-row:last-child {
+  border-bottom: 0;
+}
+.set-row.column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.set-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.set-label small {
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.set-control {
+  flex-shrink: 0;
+}
+.set-control .segmented {
+  min-width: 220px;
+}
+.set-control .segmented button {
+  padding: 0 10px;
+  height: 28px;
+}
+.set-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.set-note {
+  margin: 8px 0 4px;
+  color: var(--muted);
+}
+select {
+  font: inherit;
+  min-width: 180px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+select:disabled {
+  opacity: 0.5;
+}
+/* An on / off switch. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.switch .knob {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--active);
+  transition: background 0.15s;
+}
+.switch .knob::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s;
+}
+.switch.on .knob {
+  background: var(--accent);
+}
+.switch.on .knob::after {
+  transform: translateX(16px);
+}
+.switch:focus-visible .knob {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.theme-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.theme-card.on {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.theme-card .swatches {
+  display: flex;
+  gap: 4px;
+}
+.theme-card .swatches i {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+.term-preview {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  white-space: pre;
+  overflow: hidden;
+}
+.preview-cursor.bar {
+  box-shadow: inset 2px 0 0 var(--cursor);
+}
+.preview-cursor.block {
+  background: var(--cursor);
+}
+.preview-cursor.underline {
+  box-shadow: inset 0 -2px 0 var(--cursor);
+}
+.preview-cursor.blink {
+  animation: blink 1s step-end infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.set-shortcuts h4 {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.set-shortcuts dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 16px;
+  margin: 0;
+}
+.set-shortcuts dd {
+  margin: 0;
+  text-align: right;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.set-shortcuts kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--hover);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Several pasted lines, shown before they are pasted. */
+.paste-preview {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: 7px;
+  background: var(--hover);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre;
+}
+
+/* The terminal bell, when set to flash. */
+.term-area.bell {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}

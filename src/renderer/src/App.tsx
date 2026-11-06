@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import type { Host, HostInput, SessionStatus, Settings } from '@shared/types'
-import { api, chrome, confirmDialog, dismissDialog, showDialog } from './lib'
+import { api, chrome, confirmDialog, dismissDialog, setConflictDefault, showDialog } from './lib'
 import { installShortcutDispatcher, setShortcutOverrides, useShortcuts } from './useShortcuts'
 import { FONT_MAX, FONT_MIN, Sidebar } from './components/Sidebar'
 import { HostForm } from './components/HostForm'
@@ -11,6 +11,7 @@ import { Transfers } from './components/Transfers'
 import { Logo } from './components/Logo'
 import { TabBar } from './components/TabBar'
 import { ShortcutSheet } from './components/ShortcutSheet'
+import { SettingsWindow } from './components/SettingsWindow'
 
 export interface Tab {
   id: string
@@ -36,6 +37,7 @@ export function App(): React.JSX.Element {
   const [form, setForm] = useState<FormState>(null)
   const [renameRequest, setRenameRequest] = useState<{ id: string; seq: number } | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     void api.listHosts().then(setHosts)
@@ -197,6 +199,9 @@ export function App(): React.JSX.Element {
   // -------------------------------------------------------------- shortcuts
   useEffect(() => installShortcutDispatcher(), [])
   useEffect(() => setShortcutOverrides(settings?.shortcuts), [settings?.shortcuts])
+  useEffect(() => setConflictDefault(settings?.conflictDefault ?? 'ask'), [settings?.conflictDefault])
+  // macOS: Liman › Settings… in the menu bar.
+  useEffect(() => api.onOpenSettings(() => setSettingsOpen(true)), [])
 
   const switchTab = (step: number): void =>
     setActiveId((a) => {
@@ -250,7 +255,8 @@ export function App(): React.JSX.Element {
     'zoom.in': () => zoom(1),
     'zoom.out': () => zoom(-1),
     'zoom.reset': () => zoom(0),
-    'help.shortcuts': () => setSheetOpen(true)
+    'help.shortcuts': () => setSheetOpen(true),
+    'app.settings': () => setSettingsOpen(true)
   })
 
   const active = tabs.find((t) => t.id === activeId)
@@ -275,6 +281,7 @@ export function App(): React.JSX.Element {
         onConnect={openHost}
         onEdit={(host) => setForm({ host })}
         onNew={(prefill) => setForm({ prefill })}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <main className="main">
@@ -310,9 +317,8 @@ export function App(): React.JSX.Element {
               key={t.id}
               tab={t}
               active={t.id === activeId}
-              theme={theme}
-              fontSize={settings.fontSize}
-              instantTyping={settings.instantTyping}
+              appTheme={theme}
+              settings={settings}
               onZoom={zoom}
               peers={tabs
                 .filter((o) => o.id !== t.id && o.status === 'connected' && o.sessionId)
@@ -354,6 +360,9 @@ export function App(): React.JSX.Element {
         />
       )}
       {sheetOpen && <ShortcutSheet onClose={() => setSheetOpen(false)} />}
+      {settingsOpen && (
+        <SettingsWindow settings={settings} appTheme={theme} onChange={updateSettings} onClose={() => setSettingsOpen(false)} />
+      )}
       <Transfers />
       <DialogHost />
     </div>

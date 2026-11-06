@@ -47,6 +47,7 @@ Drag anything from your desktop onto a terminal: Liman finds the folder that she
 - **Keyboard:** every action has a shortcut: move through files with the arrow keys, type a name to jump to it, filter a folder, go back and forward, refresh with F5, find in the terminal. Press F1 for the full list, or see [Shortcuts](#shortcuts).
 - **Conflict handling:** If a file with the same name already exists you can choose *Keep both* (`file (1).txt`), *Replace* or *Cancel*.
 - **Instant typing:** on distant servers, what you type and delete shows at once instead of after the server's echo (like Mosh). Liman checks every guess against what the server sends and drops wrong ones, and it never guesses at password prompts or in full-screen programs such as vim. Toggle it with the ⚡ button in the sidebar.
+- **Settings** (⚙ in the sidebar, Ctrl+, / ⌘,): app theme, terminal colour presets (One Dark, Dracula, Solarized, Nord, Gruvbox, …), font, size, line height and cursor; scrollback, copy on select, right-click menu, a warning before pasting several lines, the bell; hidden files, what to do when a name is taken, where downloads go; reconnecting, keepalive and timeouts; updates. Changes apply at once.
 - **Light / dark / system theme**; terminal font zoom with Ctrl/Cmd + scroll or Ctrl/Cmd + = / - / 0.
 - **Organised host list:** drag hosts and groups into any order, move hosts between groups, collapse groups you don't need.
 - **Authentication:** password, SSH key (including passphrase-protected keys), SSH agent, and keyboard-interactive (2FA).
@@ -102,6 +103,7 @@ On Windows and Linux the terminal sends Ctrl+letter keys to the shell (Ctrl+W de
 | Smaller text | `Ctrl+-` | `⌘-` |
 | Default text size | `Ctrl+0` | `⌘0` |
 | Keyboard shortcuts | `F1` | `F1` |
+| Settings | `Ctrl+,` | `⌘,` |
 
 ### Terminal
 

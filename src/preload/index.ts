@@ -33,6 +33,14 @@ const api = {
     ipcRenderer.invoke('hosts:moveGroup', group, beforeGroup),
 
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
+  getAppInfo: (): Promise<{ version: string; packaged: boolean }> => ipcRenderer.invoke('app:info'),
+  /** Settings › Updates › Check now. */
+  checkForUpdates: (): Promise<{ status: UpdateStatus; error?: string }> => ipcRenderer.invoke('update:check'),
+  openLogs: (): void => ipcRenderer.send('shell:openLogs'),
+  /** A folder picked by the user, or null. */
+  pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickFolder'),
+  /** macOS: Liman › Settings… in the menu bar. */
+  onOpenSettings: (cb: () => void) => on('menu:settings', cb),
   setSettings: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke('settings:set', patch),
   setTitleBar: (color: string, symbolColor: string): Promise<void> =>
     ipcRenderer.invoke('window:titlebar', color, symbolColor),

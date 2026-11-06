@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_SETTINGS } from '../../src/shared/settings'
 
 // The store persists under Electron's userData folder; point it at a temp dir and
 // stand in for safeStorage with a reversible fake.
@@ -94,14 +95,16 @@ describe('settings', () => {
   it('fills new settings in for older files', async () => {
     seed({ settings: { theme: 'dark', fontSize: 15 } })
     const store = await freshStore()
-    expect(store.getSettings()).toEqual({ theme: 'dark', fontSize: 15, instantTyping: true, collapsedGroups: [] })
+    expect(store.getSettings()).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', fontSize: 15 })
   })
 
   it('clamps and sanitises what the renderer sends', async () => {
     seed({})
     const store = await freshStore()
     const s = store.setSettings({ fontSize: 400, theme: 'neon' as never, instantTyping: 'no' as never, collapsedGroups: ['Prod', 7 as never] })
-    expect(s).toEqual({ theme: 'system', fontSize: 32, instantTyping: true, collapsedGroups: ['Prod'] })
+    expect(s).toEqual({ ...DEFAULT_SETTINGS, fontSize: 32, collapsedGroups: ['Prod'] })
     expect(store.setSettings({ instantTyping: false }).instantTyping).toBe(false)
+    // Saved to disk as checked.
+    expect(JSON.parse(readFileSync(join(dir.path, 'liman.json'), 'utf8')).settings.fontSize).toBe(32)
   })
 })

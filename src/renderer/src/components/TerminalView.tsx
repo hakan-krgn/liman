@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SearchAddon } from '@xterm/addon-search'
-import { Loader2, RotateCw, Upload, WifiOff } from 'lucide-react'
+import { ClipboardPaste, Copy, Eraser, Loader2, RotateCw, Search, TextSelect, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
-import type { ClipContent } from '@shared/types'
+import type { ClipContent, Settings } from '@shared/types'
 import { shQuote } from '@shared/shell'
 import {
   api,
@@ -21,11 +21,12 @@ import {
   setRemoteDrag,
   onSessionData,
   showDialog,
-  terminalThemes,
   uploadWithConfirm
 } from '../lib'
+import { terminalTheme } from '../themes'
+import { terminalFont } from '../fonts'
 import { describeItems, pasteInto } from '../paste'
-import { useShortcuts } from '../useShortcuts'
+import { keyHint, useShortcuts } from '../useShortcuts'
 import { SftpPanel, type Peer } from './SftpPanel'
 import { TerminalFind } from './TerminalFind'
 import { useAutoReconnect } from '../useAutoReconnect'
@@ -35,10 +36,9 @@ import { resetModes } from '../terminalModes'
 interface Props {
   tab: Tab
   active: boolean
-  theme: 'light' | 'dark'
-  fontSize: number
-  /** Show typing before the server echoes it. */
-  instantTyping: boolean
+  /** The app's theme right now (Liman's terminal colours follow it). */
+  appTheme: 'light' | 'dark'
+  settings: Settings
   onSession(sessionId: string): void
   onReconnect(): void
   onClose(): void
@@ -49,9 +49,7 @@ interface Props {
   peers: Peer[]
 }
 
-export const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace'
-
-export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSession, onReconnect, onClose, onToggleFiles, onZoom, peers }: Props): React.JSX.Element {
+export function TerminalView({ tab, active, appTheme, settings, onSession, onReconnect, onClose, onToggleFiles, onZoom, peers }: Props): React.JSX.Element {
   const hostEl = useRef<HTMLDivElement>(null)
   const term = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
@@ -59,14 +57,21 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
   const search = useRef<SearchAddon | null>(null)
   const [finding, setFinding] = useState(false)
   const sessionId = useRef<string>('')
-  const live = useRef({ status: tab.status, onReconnect, onZoom, paste: async (): Promise<void> => {} })
+  const live = useRef({ status: tab.status, onReconnect, onZoom, settings, paste: async (): Promise<void> => {}, bell: (): void => {} })
   const lastPasteKey = useRef(0)
+  const colors = useMemo(() => terminalTheme(settings.terminalTheme, appTheme), [settings.terminalTheme, appTheme])
+  const [flash, setFlash] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const menuEl = useRef<HTMLDivElement>(null)
 
   const [drop, setDrop] = useState<{ dir?: string; remote: boolean } | null>(null)
   const dragDepth = useRef(0)
 
-  const { retry, stop: stopRetry, now: retryNow } = useAutoReconnect(tab, onReconnect, () =>
-    term.current?.write('\x1b[2m[Liman] Reconnected. The previous shell ended with the old connection.\x1b[0m\r\n')
+  const { retry, stop: stopRetry, now: retryNow } = useAutoReconnect(
+    tab,
+    onReconnect,
+    () => term.current?.write('\x1b[2m[Liman] Reconnected. The previous shell ended with the old connection.\x1b[0m\r\n'),
+    { enabled: settings.autoReconnect, maxAttempts: settings.reconnectAttempts }
   )
   // Re-render once a second for the countdown.
   const [, tick] = useState(0)
@@ -97,7 +102,8 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     const content: ClipContent = await api.inspectClipboard().catch(() => ({ kind: 'none' }))
     if (content.kind === 'none') {
       const text = await navigator.clipboard.readText().catch(() => '')
-      if (text) t.paste(text)
+      if (text && (await confirmLines(text))) t.paste(text)
+      t.focus()
       return
     }
     if (tab.status !== 'connected') return
@@ -114,7 +120,26 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
       t.focus()
     }
   }
-  live.current = { status: tab.status, onReconnect, onZoom, paste: smartPaste }
+  /** Several lines pasted at a prompt may each run as a command: ask first (Settings › Terminal). */
+  const confirmLines = async (text: string): Promise<boolean> => {
+    const lines = text.replace(/(\r?\n)+$/, '').split(/\r\n|\r|\n/)
+    const fullScreen = term.current?.buffer.active.type === 'alternate'
+    if (lines.length < 2 || fullScreen || !live.current.settings.confirmMultilinePaste) return true
+    const preview = lines.slice(0, 8).map((l) => (l.length > 90 ? `${l.slice(0, 90)}…` : l))
+    if (lines.length > 8) preview.push(`… ${lines.length - 8} more`)
+    return confirmDialog(`Paste ${lines.length} lines?`, <pre className="paste-preview">{preview.join('\n')}</pre>, 'Paste')
+  }
+
+  /** The bell (Ctrl+G, tab completion with no match, …) as Settings › Terminal says. */
+  const ring = (): void => {
+    const bell = live.current.settings.bell
+    if (bell === 'sound') beep()
+    else if (bell === 'visual') {
+      setFlash(true)
+      setTimeout(() => setFlash(false), 180)
+    }
+  }
+  live.current = { status: tab.status, onReconnect, onZoom, settings, paste: smartPaste, bell: ring }
 
   /** Ctrl+Enter in the files panel: `cd` the shell into that folder. */
   const cdHere = (dir: string): void => {
@@ -159,18 +184,18 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
   // Create the terminal once per tab.
   useEffect(() => {
     const t = new Terminal({
-      fontFamily: TERMINAL_FONT,
-      fontSize,
-      lineHeight: 1.2,
-      cursorBlink: true,
-      cursorStyle: 'bar',
-      scrollback: 10000,
+      fontFamily: terminalFont(settings.fontFamily),
+      fontSize: settings.fontSize,
+      lineHeight: settings.lineHeight,
+      cursorBlink: settings.cursorBlink,
+      cursorStyle: settings.cursorStyle,
+      scrollback: settings.scrollback,
       allowProposedApi: true,
       macOptionIsMeta: true,
       // In programs that capture the mouse (Claude Code, vim, htop), Shift-drag (Option-drag
       // on macOS) still selects text in the terminal itself.
       macOptionClickForcesSelection: true,
-      theme: terminalThemes[theme]
+      theme: colors
     })
     const f = new FitAddon()
     t.loadAddon(f)
@@ -194,7 +219,7 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     overlay.className = 'typeahead'
     t.element!.querySelector('.xterm-screen')!.appendChild(overlay)
     const ta = new TypeAhead(t, (p) => drawPrediction(t, overlay, p))
-    ta.setEnabled(instantTyping)
+    ta.setEnabled(settings.instantTyping)
     typeAhead.current = ta
 
     term.current = t
@@ -257,10 +282,21 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
       return false
     })
 
-    // Right click: copy the selection, or paste when nothing is selected.
+    t.onBell(() => live.current.bell())
+
+    // Settings › Terminal: copy what gets selected, a moment after the mouse lets go.
+    let selectionTimer: ReturnType<typeof setTimeout> | undefined
+    t.onSelectionChange(() => {
+      clearTimeout(selectionTimer)
+      if (!live.current.settings.copyOnSelect || !t.hasSelection()) return
+      selectionTimer = setTimeout(() => void navigator.clipboard.writeText(t.getSelection()), 150)
+    })
+
+    // Right click: copy the selection or paste when nothing is selected, or a menu (Settings › Terminal).
     const onContext = (e: MouseEvent): void => {
       e.preventDefault()
-      if (t.hasSelection()) copySelection()
+      if (live.current.settings.rightClick === 'menu') setMenu({ x: e.clientX, y: e.clientY })
+      else if (t.hasSelection()) copySelection()
       else void live.current.paste()
     }
     hostEl.current!.addEventListener('contextmenu', onContext)
@@ -300,14 +336,56 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.attempt])
 
+  // Settings › Appearance and Terminal apply at once.
   useEffect(() => {
-    if (!term.current) return
-    term.current.options.theme = terminalThemes[theme]
-    term.current.options.fontSize = fontSize
+    const t = term.current
+    if (!t) return
+    t.options.theme = colors
+    t.options.fontFamily = terminalFont(settings.fontFamily)
+    t.options.fontSize = settings.fontSize
+    t.options.lineHeight = settings.lineHeight
+    t.options.cursorStyle = settings.cursorStyle
+    t.options.cursorBlink = settings.cursorBlink
+    t.options.scrollback = settings.scrollback
     refit()
-  }, [theme, fontSize])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colors, settings.fontFamily, settings.fontSize, settings.lineHeight, settings.cursorStyle, settings.cursorBlink, settings.scrollback])
 
-  useEffect(() => typeAhead.current?.setEnabled(instantTyping), [instantTyping])
+  useEffect(() => typeAhead.current?.setEnabled(settings.instantTyping), [settings.instantTyping])
+
+  // The right-click menu closes on any click elsewhere, and stays inside the window.
+  useEffect(() => {
+    if (!menu) return
+    const close = (): void => setMenu(null)
+    window.addEventListener('mousedown', close)
+    window.addEventListener('blur', close)
+    return () => {
+      window.removeEventListener('mousedown', close)
+      window.removeEventListener('blur', close)
+    }
+  }, [menu])
+  useLayoutEffect(() => {
+    const el = menuEl.current
+    if (!menu || !el) return
+    const r = el.getBoundingClientRect()
+    el.style.left = `${Math.max(8, Math.min(menu.x, window.innerWidth - r.width - 8))}px`
+    el.style.top = `${Math.max(8, Math.min(menu.y, window.innerHeight - r.height - 8))}px`
+  }, [menu])
+
+  /** A right-click menu item; it closes the menu and gives the terminal the focus back. */
+  const menuItem = (icon: React.ReactNode, label: string, shortcut: string, run: () => void, disabled = false): React.JSX.Element => (
+    <button
+      disabled={disabled}
+      onClick={() => {
+        setMenu(null)
+        run()
+        term.current?.focus()
+      }}
+    >
+      {icon} {label}
+      {shortcut && <kbd className="menu-key">{keyHint(shortcut)}</kbd>}
+    </button>
+  )
 
   // Focus follows what just appeared: the files panel when it opens, the terminal otherwise.
   const filesWereOpen = useRef(tab.filesOpen)
@@ -378,7 +456,14 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
 
   return (
     <div className="session" style={{ display: active ? 'flex' : 'none' }}>
-      <div className="term-area" onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      <div
+        className={`term-area ${flash ? 'bell' : ''}`}
+        style={{ background: colors.background }}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
         <div className="term-host" ref={hostEl} />
         {finding && search.current && (
           <TerminalFind
@@ -459,7 +544,29 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
       </div>
 
       {tab.filesOpen && (
-        <SftpPanel sessionId={tab.sessionId} connected={connected} peers={peers} onClose={onToggleFiles} onCdHere={cdHere} />
+        <SftpPanel
+          sessionId={tab.sessionId}
+          connected={connected}
+          peers={peers}
+          showHidden={settings.showHidden}
+          confirmDelete={settings.confirmDelete}
+          onClose={onToggleFiles}
+          onCdHere={cdHere}
+        />
+      )}
+
+      {menu && (
+        <div className="menu" ref={menuEl} style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
+          {menuItem(<Copy size={14} />, 'Copy', 'terminal.copy', copySelection, !term.current?.hasSelection())}
+          {menuItem(<ClipboardPaste size={14} />, 'Paste', 'terminal.paste', () => void smartPaste())}
+          {menuItem(<TextSelect size={14} />, 'Select all', '', () => term.current?.selectAll())}
+          <hr />
+          {menuItem(<Search size={14} />, 'Find', 'terminal.find', () => setFinding(true))}
+          {menuItem(<Eraser size={14} />, 'Clear', 'terminal.clear', () => {
+            term.current?.clear()
+            typeAhead.current?.reset()
+          })}
+        </div>
       )}
     </div>
   )
@@ -495,4 +602,19 @@ function drawPrediction(t: Terminal, el: HTMLElement, p: Prediction | null): voi
       el.appendChild(cursor)
     })
   )
+}
+
+let audio: AudioContext | null = null
+
+/** A short, quiet beep for the terminal bell. */
+function beep(): void {
+  audio ??= new AudioContext()
+  const tone = audio.createOscillator()
+  const gain = audio.createGain()
+  tone.frequency.value = 880
+  gain.gain.setValueAtTime(0.06, audio.currentTime)
+  gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + 0.12)
+  tone.connect(gain).connect(audio.destination)
+  tone.start()
+  tone.stop(audio.currentTime + 0.13)
 }

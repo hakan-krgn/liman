@@ -24,11 +24,51 @@ export interface HostInput extends Omit<Host, 'id' | 'hasPassword' | 'hasPassphr
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
+/** Everything the Settings window changes (defaults and rules: shared/settings.ts). */
 export interface Settings {
+  // Appearance
   theme: ThemeMode
+  /** A preset from shared/settings.ts TERMINAL_THEMES; 'liman' follows the app's light / dark theme. */
+  terminalTheme: string
+  /** A font installed on this computer; '' is the built-in JetBrains Mono. */
+  fontFamily: string
   fontSize: number
+  lineHeight: number
+  cursorStyle: 'bar' | 'block' | 'underline'
+  cursorBlink: boolean
+
+  // Terminal
+  scrollback: number
   /** Show typing before a distant server echoes it. */
   instantTyping: boolean
+  /** Copy text as soon as it is selected. */
+  copyOnSelect: boolean
+  /** Right click copies the selection or pastes, or opens a menu. */
+  rightClick: 'copyPaste' | 'menu'
+  /** Ask before pasting several lines (each line would run as a command). */
+  confirmMultilinePaste: boolean
+  bell: 'off' | 'visual' | 'sound'
+
+  // Files
+  showHidden: boolean
+  /** What to do when a file being uploaded or copied already exists. */
+  conflictDefault: 'ask' | ConflictMode
+  /** Where downloads go; '' is the system's Downloads folder. */
+  downloadDir: string
+  confirmDelete: boolean
+
+  // Connection
+  /** Reconnect by itself when a connection drops. */
+  autoReconnect: boolean
+  reconnectAttempts: number
+  /** 0 turns keepalives off. */
+  keepaliveSeconds: number
+  connectTimeoutSeconds: number
+
+  // Updates
+  /** Windows: download updates in the background (otherwise just tell). */
+  autoUpdate: boolean
+
   /** Sidebar groups the user folded away. */
   collapsedGroups: string[]
   /** Keys the user changed: action id -> chords ("Ctrl+Shift+K"); [] turns an action off. */
