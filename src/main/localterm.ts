@@ -59,8 +59,39 @@ export function pickShell(chosen: string, shells: LocalShell[]): LocalShell | un
   return shells.find((s) => chosen && s.path.toLowerCase() === chosen.toLowerCase()) ?? shells[0]
 }
 
+/** Windows console shells: they read keys, not terminal sequences. */
+const CONSOLE_SHELL = /[\\/](powershell|pwsh|cmd)\.exe$/i
+
+/**
+ * A key press and release in ConPTY's win32-input-mode: the program gets that
+ * very key, as it would in a console window.
+ */
+function keyEvent(vk: number, scanCode: number, char: number, controlKeys: number): string {
+  const event = (down: 0 | 1): string => `\x1b[${vk};${scanCode};${char};${down};${controlKeys};1_`
+  return event(1) + event(0)
+}
+const LEFT_CTRL = 0x08
+const ENHANCED_KEY = 0x100
+
+/**
+ * What the terminal sends for Ctrl+Backspace / Ctrl+Delete (see TerminalView)
+ * means "delete a word" to Unix shells. ConPTY would hand PowerShell or cmd an
+ * Alt+Backspace (PowerShell then types ^H) and a plain "d": they get the keys.
+ */
+export const CONSOLE_KEYS: Record<string, string> = {
+  '\x1b\x7f': keyEvent(8, 14, 127, LEFT_CTRL),
+  '\x1bd': keyEvent(46, 83, 0, LEFT_CTRL | ENHANCED_KEY)
+}
+
+/** Whether a shell is a Windows console program (PowerShell, cmd) rather than a Unix-style one. */
+export function readsConsoleKeys(shellPath: string): boolean {
+  return CONSOLE_SHELL.test(shellPath)
+}
+
 export class LocalTerminals {
   private readonly ptys = new Map<string, IPty>()
+  /** Sessions running a Windows console shell. */
+  private readonly consoleKeys = new Set<string>()
 
   constructor(
     private readonly send: (channel: string, ...args: unknown[]) => void,
@@ -89,12 +120,14 @@ export class LocalTerminals {
         useConptyDll: true
       })
       this.ptys.set(sessionId, pty)
+      if (process.platform === 'win32' && readsConsoleKeys(shell.path)) this.consoleKeys.add(sessionId)
       status({ status: 'connected' })
       pty.onData((d) => this.send('ssh:data', sessionId, Buffer.from(d, 'utf8')))
       pty.onExit(({ exitCode }) => {
         // Closed by us (tab closed): nobody is waiting to hear.
         if (this.ptys.get(sessionId) !== pty) return
         this.ptys.delete(sessionId)
+        this.consoleKeys.delete(sessionId)
         status({ status: 'closed', message: exitCode ? `${shell.label} exited with code ${exitCode}` : `${shell.label} exited` })
       })
     } catch (err) {
@@ -103,7 +136,9 @@ export class LocalTerminals {
   }
 
   write(sessionId: string, data: string): void {
-    this.ptys.get(sessionId)?.write(data)
+    // Only a lone key press is translated, never the same bytes inside a paste.
+    const key = this.consoleKeys.has(sessionId) ? CONSOLE_KEYS[data] : undefined
+    this.ptys.get(sessionId)?.write(key ?? data)
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
@@ -118,6 +153,7 @@ export class LocalTerminals {
     const pty = this.ptys.get(sessionId)
     if (!pty) return
     this.ptys.delete(sessionId)
+    this.consoleKeys.delete(sessionId)
     try {
       pty.kill()
     } catch {

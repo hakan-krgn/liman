@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findShells, pickShell } from '../../src/main/localterm'
+import { findShells, pickShell, readsConsoleKeys } from '../../src/main/localterm'
 
 const fakeEnv = (platform: NodeJS.Platform, files: string[], env: Record<string, string> = {}, etcShells = '') => ({
   platform,
@@ -36,6 +36,15 @@ describe('finding local shells', () => {
     )
     expect(shells.map((s) => `${s.label}:${s.path}`)).toEqual(['fish:/opt/homebrew/bin/fish', 'bash:/bin/bash', 'zsh:/bin/zsh'])
     expect(shells.every((s) => s.args[0] === '-l')).toBe(true)
+  })
+
+  it('tells Windows console shells from Unix-style ones', () => {
+    expect(readsConsoleKeys('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')).toBe(true)
+    expect(readsConsoleKeys('C:\\Program Files\\PowerShell\\7\\pwsh.exe')).toBe(true)
+    expect(readsConsoleKeys('C:\\WINDOWS\\system32\\cmd.exe')).toBe(true)
+    expect(readsConsoleKeys('C:\\Program Files\\Git\\bin\\bash.exe')).toBe(false)
+    expect(readsConsoleKeys('C:\\Windows\\System32\\wsl.exe')).toBe(false)
+    expect(readsConsoleKeys('/usr/local/bin/pwsh')).toBe(false)
   })
 
   it('uses the chosen shell while it exists, otherwise the usual one', () => {

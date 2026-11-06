@@ -37,6 +37,25 @@ describe.skipIf(process.platform === 'linux')('local terminals', () => {
     expect(terms.has('a')).toBe(false)
   })
 
+  it.runIf(process.platform === 'win32')('deletes words in PowerShell with Ctrl+Backspace and Ctrl+Delete', async () => {
+    const { terms, waitFor, text } = run()
+    await terms.open('c', 120, 30)
+    // What TerminalView sends for Ctrl+Backspace, at the end of the line.
+    terms.write('c', 'echo aaa-bbb ccc-ddd')
+    terms.write('c', '\x1b\x7f')
+    terms.write('c', '\r')
+    // PowerShell's echo prints each word on a line: "ddd" is gone, the rest stays.
+    expect(await waitFor(() => /\r?\nccc-\r?\n/.test(text('c'))), text('c').slice(-300)).toBe(true)
+    expect(text('c')).not.toContain('^H')
+    // What it sends for Ctrl+Delete, with the cursor before "xxx" (Home, then Right x5).
+    terms.write('c', 'echo xxx.yyy')
+    terms.write('c', '\x1b[H' + '\x1b[C'.repeat(5))
+    terms.write('c', '\x1bd')
+    terms.write('c', '\r')
+    expect(await waitFor(() => /\r?\n\.?yyy\r?\n/.test(text('c'))), text('c').slice(-300)).toBe(true)
+    terms.close('c')
+  })
+
   it('reports a shell that exits by itself', async () => {
     const { terms, statuses, waitFor } = run()
     await terms.open('b', 80, 24)
