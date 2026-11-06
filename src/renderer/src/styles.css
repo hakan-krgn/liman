@@ -435,11 +435,6 @@ code {
   justify-content: space-between;
   align-items: center;
 }
-.foot-toggles {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
 .font-stepper {
   display: flex;
   align-items: center;
@@ -1496,8 +1491,10 @@ code {
   min-width: 220px;
 }
 .set-control .segmented button {
-  padding: 0 10px;
+  padding: 0 14px;
   height: 28px;
+  /* "Keep both" and "Copy / paste" on one line. */
+  white-space: nowrap;
 }
 .set-inline {
   display: flex;

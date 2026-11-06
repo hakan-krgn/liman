@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
-import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Settings as Gear, Sun, Zap } from 'lucide-react'
+import { ChevronRight, GripVertical, Minus, Pencil, Plus, Search, Server, Settings as Gear } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
-import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
+import type { Host, HostInput, Settings } from '@shared/types'
 import { groupOf, moveGroupIn, moveHostIn } from '@shared/order'
 import { parseTarget } from '@shared/target'
 import { api, confirmDialog, errorMessage, showDialog } from '../lib'
@@ -15,9 +15,7 @@ import { UpdateNotice } from './UpdateNotice'
 interface Props {
   hosts: Host[]
   connected: Set<string>
-  themeMode: ThemeMode
   fontSize: number
-  instantTyping: boolean
   collapsedGroups: string[]
   onSettings(patch: Partial<Settings>): void
   onHostsChange(hosts: Host[]): void
@@ -27,9 +25,6 @@ interface Props {
   onOpenSettings(): void
 }
 
-const nextTheme: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' }
-const themeIcon = { system: Monitor, light: Sun, dark: Moon }
-const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' }
 
 export const FONT_MIN = 8
 export const FONT_MAX = 32
@@ -44,7 +39,6 @@ type Item =
 
 export function Sidebar(p: Props): React.JSX.Element {
   const [query, setQuery] = useState('')
-  const ThemeIcon = themeIcon[p.themeMode]
   const searching = query.trim() !== ''
   // While a group is dragged its hosts fold into the header so it moves as one piece.
   const [draggingGroup, setDraggingGroup] = useState<string | null>(null)
@@ -248,29 +242,10 @@ export function Sidebar(p: Props): React.JSX.Element {
           <Plus size={15} /> New host
         </button>
         <div className="foot-tools">
-          <div className="foot-toggles">
-            <button
-              className="icon-btn"
-              onClick={() => p.onSettings({ theme: nextTheme[p.themeMode] })}
-              title={themeLabel[p.themeMode]}
-            >
-              <ThemeIcon size={16} />
-            </button>
-            <button
-              className={`icon-btn${p.instantTyping ? ' on' : ''}`}
-              onClick={() => p.onSettings({ instantTyping: !p.instantTyping })}
-              title={
-                p.instantTyping
-                  ? 'Instant typing is on: on distant servers, what you type shows before the server echoes it'
-                  : 'Instant typing is off'
-              }
-            >
-              <Zap size={16} />
-            </button>
-            <button className="icon-btn" onClick={p.onOpenSettings} title={`Settings (${keyHint('app.settings')})`}>
-              <Gear size={16} />
-            </button>
-          </div>
+          {/* Theme, instant typing and the rest live in Settings. */}
+          <button className="icon-btn" onClick={p.onOpenSettings} title={`Settings (${keyHint('app.settings')})`}>
+            <Gear size={16} />
+          </button>
           <div className="font-stepper" title="Terminal font size (Ctrl + scroll)">
             <button className="icon-btn" onClick={() => p.onSettings({ fontSize: Math.max(FONT_MIN, p.fontSize - 1) })}>
               <Minus size={14} />

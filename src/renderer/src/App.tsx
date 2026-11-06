@@ -272,9 +272,7 @@ export function App(): React.JSX.Element {
       <Sidebar
         hosts={hosts}
         connected={connectedHosts}
-        themeMode={settings.theme}
         fontSize={settings.fontSize}
-        instantTyping={settings.instantTyping}
         collapsedGroups={settings.collapsedGroups}
         onSettings={updateSettings}
         onHostsChange={setHosts}
