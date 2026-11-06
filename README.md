@@ -43,6 +43,8 @@ Drag anything from your desktop onto a terminal: Liman finds the folder that she
 - **Drag-and-drop uploads:** Drop files or folders from the desktop, Explorer or Finder onto a terminal and they are uploaded to whatever directory that terminal is currently in. The target directory is shown before you drop.
 - **SFTP panel:** Browse folders, drop onto a folder to upload into it, double-click to download (to your Downloads folder), rename, delete, create folders, and jump to the terminal's current directory.
 - **Drag-and-drop downloads:** Drag files or folders out of the SFTP panel onto the desktop or an Explorer / Finder window and they are downloaded right where you drop them. On macOS, Liman asks once for permission to see which Finder windows are open.
+- **Copy and paste files:** In the SFTP panel, Ctrl+C (⌘C) copies files and folders; paste them in Explorer, Finder or on the desktop and they are downloaded right there (paste as often as you like). Files copied in Explorer or Finder, and screenshots (as PNG), are uploaded with Ctrl+V in the panel; in a terminal, Ctrl+V offers to upload them into its current folder. Pasting in another server's panel copies between the servers; Ctrl+X then Ctrl+V on the same server moves, and a copy next to its original is named `file (copy).txt`. Copies within one server run on the server itself.
+- **Keyboard:** every action has a shortcut: move through files with the arrow keys, type a name to jump to it, filter a folder, go back and forward, refresh with F5, find in the terminal. Press F1 for the full list, or see [Shortcuts](#shortcuts).
 - **Conflict handling:** If a file with the same name already exists you can choose *Keep both* (`file (1).txt`), *Replace* or *Cancel*.
 - **Instant typing:** on distant servers, what you type and delete shows at once instead of after the server's echo (like Mosh). Liman checks every guess against what the server sends and drops wrong ones, and it never guesses at password prompts or in full-screen programs such as vim. Toggle it with the ⚡ button in the sidebar.
 - **Light / dark / system theme**; terminal font zoom with Ctrl/Cmd + scroll or Ctrl/Cmd + = / - / 0.
@@ -79,11 +81,73 @@ To ship a version: create a release with a tag such as `v0.2.0` on GitHub (*Rele
 
 ## Shortcuts
 
-| Action | Windows | macOS |
+On Windows and Linux the terminal sends Ctrl+letter keys to the shell (Ctrl+W deletes a word, Ctrl+R searches history), so Liman's own shortcuts there use Ctrl+Shift. Where a key does two things, the place you're in wins: F2 renames a file in the files panel and the tab elsewhere.
+
+<!-- shortcuts:start -->
+
+### Everywhere
+
+| Action | Windows / Linux | macOS |
 |---|---|---|
-| Copy / Paste | Ctrl+C (with a selection) / Ctrl+V, or right-click | Cmd+C / Cmd+V |
-| Close tab | Ctrl+Shift+W | Cmd+W |
-| Switch tab | Ctrl+Tab, Ctrl+1…9 | Ctrl+Tab, Cmd+1…9 |
+| Next tab | `Ctrl+Tab` | `⌃Tab` |
+| Previous tab | `Ctrl+Shift+Tab` | `⌃⇧Tab` |
+| Go to tab 1–9 | `Ctrl+1…9` | `⌘1…9` |
+| New connection (search hosts) | `Ctrl+Shift+T` | `⌘T` |
+| Duplicate tab | `Ctrl+Shift+D` | `⇧⌘D` |
+| Reconnect | `Ctrl+Shift+R` | `⇧⌘R` |
+| Close tab | `Ctrl+Shift+W` | `⌘W` |
+| Rename tab | `F2` | `F2` |
+| Show or hide the files panel | `Ctrl+Shift+E` | `⇧⌘E` |
+| Larger text | `Ctrl+=` | `⌘=` |
+| Smaller text | `Ctrl+-` | `⌘-` |
+| Default text size | `Ctrl+0` | `⌘0` |
+| Keyboard shortcuts | `F1` | `F1` |
+
+### Terminal
+
+| Action | Windows / Linux | macOS |
+|---|---|---|
+| Copy the selection | `Ctrl+Shift+C` / `Ctrl+C` | `⌘C` |
+| Paste (files are uploaded here, after asking) | `Ctrl+Shift+V` / `Ctrl+V` | `⌘V` |
+| Find | `Ctrl+Shift+F` | `⌘F` |
+| Clear the screen and scrollback | `Ctrl+Shift+L` | `⌘K` |
+| Delete the previous / next word | `Ctrl+Backspace` / `Ctrl+Delete` | `⌥⌫` |
+
+### Files panel
+
+| Action | Windows / Linux | macOS |
+|---|---|---|
+| Copy (paste in Explorer / Finder, or in Liman) | `Ctrl+C` | `⌘C` |
+| Cut (paste in Liman to move) | `Ctrl+X` | `⌘X` |
+| Paste here (files, a screenshot, or what Liman copied) | `Ctrl+V` | `⌘V` |
+| Refresh | `F5` / `Ctrl+R` | `⌘R` |
+| Open folder / download file | `Enter` | `Enter` / `⌘↓` |
+| Parent folder | `Backspace` / `Alt+↑` | `⌘↑` |
+| Back | `Alt+←` | `⌘[` |
+| Forward | `Alt+→` | `⌘]` |
+| Rename | `F2` | `F2` |
+| Delete | `Delete` | `⌘⌫` |
+| New folder | `Ctrl+Shift+N` | `⇧⌘N` |
+| Download to the Downloads folder | `Ctrl+S` | `⌘S` |
+| Copy path | `Ctrl+Shift+C` | `⌥⌘C` |
+| Go to this folder in the terminal | `Ctrl+Enter` | `⌘Enter` |
+| Filter this folder | `Ctrl+F` | `⌘F` |
+| Type a path to go to | `Ctrl+L` | `⇧⌘G` |
+| Select all | `Ctrl+A` | `⌘A` |
+| Cancel a cut, then clear the selection | `Esc` | `Esc` |
+| Move through the list (Shift extends the selection) | `↑` `↓` `Home` `End` `PgUp` `PgDn` | `↑` `↓` `Home` `End` `PgUp` `PgDn` |
+| Jump to the first name starting with what you type | Type the start of a name | Type the start of a name |
+
+### Host list
+
+| Action | Windows / Linux | macOS |
+|---|---|---|
+| Move through the hosts | `↑` / `↓` | `↑` / `↓` |
+| Connect | `Enter` | `Enter` |
+| Edit host | `F2` | `F2` |
+| Delete host | `Delete` | `⌘⌫` |
+
+<!-- shortcuts:end -->
 
 ## How the terminal's directory is detected
 

@@ -1,28 +1,15 @@
 import { app, nativeImage, type WebContents } from 'electron'
-import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { mkdirSync, promises as fsp, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { extname, isAbsolute, join, posix } from 'node:path'
-import { safeLocalName } from './util'
+import { promises as fsp } from 'node:fs'
+import { join } from 'node:path'
+import { createStandIns, dropFolders, findStandIns, MARKER_FILE, removeStandIns, type StandIns, type StandInEntry } from './standins'
 
 /** What the renderer passes when rows start being dragged out of a files panel. */
-export interface DragOutEntry {
-  path: string
-  isDir: boolean
-}
+export type DragOutEntry = StandInEntry
 
-interface Pending {
+interface Pending extends StandIns {
   sessionId: string
-  entries: DragOutEntry[]
-  /** The stand-ins in our temp folder, one per entry. */
-  standIns: string[]
-  marker: string
-  dir: string
 }
 
-/** Inside a stand-in folder, this file carries the marker. */
-const MARKER_FILE = '.liman-drop'
 /** How long to look for dropped stand-ins after the drag ends. */
 const LOOK_FOR = process.platform === 'darwin' ? 60_000 : 6_000
 
@@ -33,10 +20,9 @@ const ICON = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAA
  * Dragging remote files onto the desktop or a folder.
  *
  * An OS drag needs real files the moment it starts, which remote files aren't.
- * So Liman drags small stand-ins with the right names (folders are empty
- * folders), each carrying a random marker. When the drag ends it looks for the
- * marker on the desktop and in open Explorer / Finder windows, and downloads
- * the real content exactly where the stand-in landed.
+ * So Liman drags stand-ins (see standins.ts). When the drag ends it looks for
+ * them on the desktop and in open Explorer / Finder windows, and downloads the
+ * real content exactly where each one landed.
  */
 export class DragOut {
   private readonly pending = new Map<string, Pending>()
@@ -48,27 +34,10 @@ export class DragOut {
 
   /** Creates the stand-ins for a drag. Synchronous: it runs during dragstart. */
   prepare(sessionId: string, entries: DragOutEntry[]): { token: string; files: string[] } {
-    const token = randomBytes(12).toString('hex')
-    const dir = join(tmpdir(), 'liman-drag', token)
-    mkdirSync(dir, { recursive: true })
-    const marker = `liman-stand-in ${token}\nLiman is downloading the real file into this place.\n`
-    const taken = new Set<string>()
-    const standIns = entries.map((e) => {
-      let name = safeLocalName(posix.basename(e.path))
-      for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${name} (${n})`
-      taken.add(name.toLowerCase())
-      const path = join(dir, name)
-      if (e.isDir) {
-        mkdirSync(path)
-        writeFileSync(join(path, MARKER_FILE), marker)
-      } else {
-        writeFileSync(path, marker)
-      }
-      return path
-    })
-    this.pending.set(token, { sessionId, entries, standIns, marker, dir })
-    setTimeout(() => this.forget(token), 10 * 60_000).unref()
-    return { token, files: standIns }
+    const s = createStandIns('liman-drag', entries)
+    this.pending.set(s.token, { ...s, sessionId })
+    setTimeout(() => this.forget(s.token), 10 * 60_000).unref()
+    return { token: s.token, files: s.files }
   }
 
   /** Runs the OS drag, then downloads into wherever the stand-ins were dropped. */
@@ -77,7 +46,7 @@ export class DragOut {
     if (!p) return
     try {
       // Windows returns once the drop happened; macOS returns at once and we keep looking.
-      sender.startDrag({ file: p.standIns[0], files: p.standIns, icon: await dragIcon(p.standIns[0]) })
+      sender.startDrag({ file: p.files[0], files: p.files, icon: await dragIcon(p.files[0]) })
       // On macOS the drag is still going; the renderer notices its end itself.
       if (process.platform !== 'darwin') onDragEnd()
       const found = await this.locate(p)
@@ -101,7 +70,7 @@ export class DragOut {
     const p = this.pending.get(token)
     if (!p) return
     this.pending.delete(token)
-    rmSync(p.dir, { recursive: true, force: true })
+    removeStandIns(p)
   }
 
   /** Finds the dropped copies of the stand-ins: entry index -> path where it landed. */
@@ -110,96 +79,21 @@ export class DragOut {
     const deadline = Date.now() + LOOK_FOR
     let folders: string[] = []
     let lastFolders = 0
-    while (Date.now() < deadline && found.size < p.standIns.length) {
+    while (Date.now() < deadline && found.size < p.files.length) {
       // Open windows change rarely; ask again every couple of seconds.
       if (Date.now() - lastFolders > 2000) {
         folders = await dropFolders()
         lastFolders = Date.now()
       }
-      for (const [i, hit] of await findStandIns(folders, p)) found.set(i, hit)
-      if (found.size < p.standIns.length) await new Promise((r) => setTimeout(r, 400))
+      for (const [i, hit] of await findStandIns(folders, p)) if (!found.has(i)) found.set(i, hit)
+      if (found.size < p.files.length) await new Promise((r) => setTimeout(r, 400))
     }
     return found
   }
-}
-
-/** Looks in `folders` for copies of the stand-ins (Explorer may have renamed them, e.g. "name (2)"). */
-export async function findStandIns(
-  folders: string[],
-  p: { standIns: string[]; entries: { isDir: boolean }[]; marker: string; dir: string }
-): Promise<Map<number, string>> {
-  const found = new Map<number, string>()
-  for (const folder of folders) {
-    if (folder.toLowerCase() === p.dir.toLowerCase()) continue
-    let names: string[]
-    try {
-      names = await fsp.readdir(folder)
-    } catch {
-      continue
-    }
-    for (const [i, standIn] of p.standIns.entries()) {
-      if (found.has(i)) continue
-      const base = standIn.split(/[\\/]/).pop()!
-      const ext = p.entries[i].isDir ? '' : extname(base)
-      const stem = (ext ? base.slice(0, -ext.length) : base).toLowerCase()
-      for (const name of names) {
-        const lower = name.toLowerCase()
-        if (!lower.startsWith(stem) || (ext && !lower.endsWith(ext.toLowerCase()))) continue
-        const path = join(folder, name)
-        const markerPath = p.entries[i].isDir ? join(path, MARKER_FILE) : path
-        const content = await fsp.readFile(markerPath, 'utf8').catch(() => '')
-        if (content === p.marker) {
-          found.set(i, path)
-          break
-        }
-      }
-    }
-  }
-  return found
 }
 
 /** The icon the system shows for this kind of file or folder. */
 async function dragIcon(path: string): Promise<Electron.NativeImage> {
   const icon = await app.getFileIcon(path, { size: 'normal' }).catch(() => null)
   return icon && !icon.isEmpty() ? icon : ICON
-}
-
-/** Where a drop most likely went: the desktop and every open Explorer / Finder window. */
-async function dropFolders(): Promise<string[]> {
-  const folders = new Set<string>([app.getPath('desktop')])
-  const windows =
-    process.platform === 'win32'
-      ? await run('powershell.exe', [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          '(New-Object -ComObject Shell.Application).Windows() | ForEach-Object { try { $_.Document.Folder.Self.Path } catch {} }'
-        ])
-      : process.platform === 'darwin'
-        ? await run(
-            'osascript',
-            [
-              'set out to ""',
-              'tell application "Finder"',
-              'repeat with w in Finder windows',
-              'try',
-              'set out to out & POSIX path of (target of w as alias) & linefeed',
-              'end try',
-              'end repeat',
-              'end tell',
-              'return out'
-            ].flatMap((line) => ['-e', line])
-          )
-        : ''
-  for (const line of windows.split(/\r?\n/)) {
-    const path = line.trim()
-    if (path && isAbsolute(path)) folders.add(path)
-  }
-  return [...folders]
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 5000, windowsHide: true }, (err, stdout) => resolve(err ? '' : String(stdout)))
-  })
 }

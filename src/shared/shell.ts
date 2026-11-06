@@ -9,3 +9,17 @@ export function shQuote(s: string): string {
 export function within(path: string, dir: string): boolean {
   return path === dir || path.startsWith(dir.endsWith('/') ? dir : `${dir}/`)
 }
+
+/** The folder a remote path is in ("/" for top-level entries). */
+export function parentOf(path: string): string {
+  return path === '/' ? '/' : path.replace(/\/[^/]+\/?$/, '') || '/'
+}
+
+/** The last part of a remote path. */
+export function baseName(path: string): string {
+  return path.replace(/\/+$/, '').split('/').pop() || path
+}
+
+export function joinPath(dir: string, name: string): string {
+  return (dir.endsWith('/') ? dir : `${dir}/`) + name
+}

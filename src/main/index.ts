@@ -7,8 +7,10 @@ import { pathToFileURL } from 'node:url'
 import { store } from './store'
 import { SessionManager } from './ssh'
 import { Updater } from './updater'
-import { DragOut, type DragOutEntry } from './dragout'
-import type { ConflictMode, HostInput, PromptResponse, Settings } from '@shared/types'
+import { DragOut } from './dragout'
+import { ClipOut } from './clipout'
+import { removeOldStandIns } from './standins'
+import type { ClipEntry, ConflictMode, HostInput, PromptResponse, SessionStatusEvent, Settings } from '@shared/types'
 
 // Development-only switches; a packaged build ignores them so nobody can point
 // the app at another renderer or profile through the environment.
@@ -44,6 +46,10 @@ function writeLog(line: string): void {
 const sessions = new SessionManager({
   log: writeLog,
   send(channel, ...args) {
+    if (channel === 'ssh:status') {
+      const e = args[0] as SessionStatusEvent
+      if (e.status === 'closed' || e.status === 'error') clipOut.sessionEnded(e.sessionId)
+    }
     if (win && !win.isDestroyed()) win.webContents.send(channel, ...args)
   },
   ask(sessionId, req) {
@@ -59,10 +65,13 @@ const sessions = new SessionManager({
   }
 })
 
-const dragOut = new DragOut(async (sessionId, remotes, targets) => {
+/** Downloads remote entries over the stand-ins that were dropped or pasted for them. */
+async function downloadOverStandIns(sessionId: string, remotes: string[], targets: string[]): Promise<void> {
   for (const t of targets) revealable.add(t)
   await sessions.download(sessionId, remotes, app.getPath('downloads'), targets)
-}, (line) => writeLog(line))
+}
+const dragOut = new DragOut(downloadOverStandIns, (line) => writeLog(line))
+const clipOut = new ClipOut({ download: downloadOverStandIns, log: writeLog })
 
 const updater = new Updater((status) => {
   if (win && !win.isDestroyed()) win.webContents.send('update:status', status)
@@ -108,6 +117,9 @@ function createWindow(): void {
     resolvePrompts(() => true)
     sessions.disconnectAll()
   })
+  // Pastes into Explorer / Finder happen while Liman is in the background.
+  win.on('focus', () => clipOut.setFocused(true))
+  win.on('blur', () => clipOut.setFocused(false))
   win.on('closed', () => {
     resolvePrompts(() => true)
     sessions.disconnectAll()
@@ -141,6 +153,15 @@ function on(channel: string, fn: (...args: unknown[]) => void): void {
     } catch (err) {
       console.error(`[ipc] ${channel}:`, err)
     }
+  })
+}
+
+/** Remote entries from the renderer: `{path, isDir}` objects, at least one. */
+function clipEntries(v: unknown): ClipEntry[] {
+  if (!Array.isArray(v) || v.length === 0 || v.length > 100_000) throw new TypeError('Expected entries')
+  return v.map((x) => {
+    if (!x || typeof x.path !== 'string' || typeof x.isDir !== 'boolean') throw new TypeError('Expected an entry')
+    return { path: x.path, isDir: x.isDir }
   })
 }
 
@@ -229,16 +250,22 @@ function registerIpc(): void {
   // Text a remote program copied (OSC 52). Write-only: nothing ever reads the clipboard for a server.
   on('clipboard:write', (text) => {
     const value = str(text)
-    if (value.length <= 1_000_000) clipboard.writeText(value)
+    if (value.length <= 1_000_000) void clipboard.writeText(value).catch(() => {})
   })
+  // Copy / cut in a files panel, and pastes inside Liman.
+  handle('clipboard:copyRemote', (sessionId, entries, mode) =>
+    clipOut.copy(str(sessionId), clipEntries(entries), mode === 'cut' ? 'cut' : 'copy')
+  )
+  handle('clipboard:inspect', () => clipOut.inspect())
+  handle('clipboard:saveImage', () => clipOut.saveImage())
+  handle('clipboard:release', () => clipOut.release())
   // Dragging remote files onto the desktop: stand-ins are made synchronously during dragstart.
   // Setting returnValue sends the reply at once, so it's set exactly once.
   ipcMain.on('dragout:prepare', (e, sessionId: unknown, entries: unknown) => {
     let result: ReturnType<DragOut['prepare']> | null = null
     try {
       if (trusted(e) && typeof sessionId === 'string' && Array.isArray(entries) && entries.length > 0) {
-        const list = entries.filter((x): x is DragOutEntry => !!x && typeof x.path === 'string' && typeof x.isDir === 'boolean')
-        if (list.length === entries.length) result = dragOut.prepare(sessionId, list)
+        result = dragOut.prepare(sessionId, clipEntries(entries))
       }
     } catch (err) {
       writeLog(`drag to desktop: ${(err as Error).message}`)
@@ -313,9 +340,19 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
   updater.start()
+  void removeOldStandIns()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// Stand-ins left on the clipboard would paste as placeholder files once Liman is gone.
+let clipboardCleared = false
+app.on('before-quit', (e) => {
+  if (clipboardCleared || !clipOut.active) return
+  e.preventDefault()
+  clipboardCleared = true
+  void clipOut.dispose().finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {

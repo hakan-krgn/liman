@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ChevronRight, GripVertical, Minus, Monitor, Moon, Pencil, Plus, Search, Server, Sun, Zap } from 'lucide-react'
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
@@ -7,7 +7,8 @@ import { CSS } from '@dnd-kit/utilities'
 import type { Host, HostInput, Settings, ThemeMode } from '@shared/types'
 import { groupOf, moveGroupIn, moveHostIn } from '@shared/order'
 import { parseTarget } from '@shared/target'
-import { api, errorMessage, showDialog } from '../lib'
+import { api, confirmDialog, errorMessage, showDialog } from '../lib'
+import { useShortcuts } from '../useShortcuts'
 import { Logo } from './Logo'
 import { UpdateNotice } from './UpdateNotice'
 
@@ -80,8 +81,61 @@ export function Sidebar(p: Props): React.JSX.Element {
     p.onSettings({ collapsedGroups: next })
   }
 
+  const listEl = useRef<HTMLElement>(null)
+
+  /** The rows of the list, groups and hosts, top to bottom. */
+  const rows = (): HTMLElement[] => [...(listEl.current?.querySelectorAll<HTMLElement>('.group-label, .host-row') ?? [])]
+
+  /** ↑ / ↓ move the focus through the rows. */
+  const onListKey = (e: React.KeyboardEvent): void => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    const all = rows()
+    const at = all.indexOf(document.activeElement as HTMLElement)
+    if (at < 0) return
+    e.preventDefault()
+    if (e.key === 'ArrowUp' && at === 0) return void listEl.current?.closest('.sidebar')?.querySelector<HTMLInputElement>('.search input')?.focus()
+    all[Math.max(0, Math.min(all.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))].focus()
+  }
+
+  /** The host whose row has the focus. */
+  const focusedHost = (): Host | undefined => {
+    const id = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('.host-row')?.dataset.hostId
+    return p.hosts.find((h) => h.id === id)
+  }
+
+  const deleteHost = async (host: Host): Promise<void> => {
+    if (!(await confirmDialog('Delete host?', `“${host.name}” will be removed from your list.`, 'Delete', true))) return
+    try {
+      await api.deleteHost(host.id)
+      p.onHostsChange(p.hosts.filter((h) => h.id !== host.id))
+    } catch (e) {
+      void showDialog({ title: "Couldn't delete", message: errorMessage(e), buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }] })
+    }
+  }
+
+  useShortcuts(
+    {
+      'hosts.edit': () => {
+        const host = focusedHost()
+        if (!host) return false
+        p.onEdit(host)
+      },
+      'hosts.delete': () => {
+        const host = focusedHost()
+        if (!host) return false
+        void deleteHost(host)
+      }
+    },
+    listEl
+  )
+
   const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'Escape') setQuery('')
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      rows()[0]?.focus()
+      return
+    }
     if (e.key !== 'Enter') return
     const first = groups.find(([g]) => !isCollapsed(g))?.[1][0]
     if (first) return p.onConnect(first)
@@ -139,7 +193,7 @@ export function Sidebar(p: Props): React.JSX.Element {
         />
       </div>
 
-      <nav className="host-list">
+      <nav className="host-list" ref={listEl} onKeyDown={onListKey}>
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -292,6 +346,7 @@ function SortableHost({
       ref={setNodeRef}
       style={style}
       className={`host-row ${isDragging ? 'lifted' : ''}`}
+      data-host-id={host.id}
       {...attributes}
       {...listeners}
       role="button"

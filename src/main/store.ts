@@ -171,6 +171,7 @@ export const store = {
     if (!['system', 'light', 'dark'].includes(next.theme)) next.theme = d.settings.theme
     next.fontSize = Math.min(32, Math.max(8, Math.round(Number(next.fontSize)) || 14))
     next.instantTyping = next.instantTyping !== false
+    if (next.shortcuts !== undefined) next.shortcuts = cleanShortcuts(next.shortcuts)
     next.collapsedGroups = Array.isArray(next.collapsedGroups) ? next.collapsedGroups.filter((g) => typeof g === 'string') : []
     d.settings = next
     save()
@@ -185,4 +186,15 @@ export const store = {
     load().knownHosts[key] = value
     save()
   }
+}
+
+/** Changed keys from the renderer: short action ids mapping to a few short chord strings. */
+function cleanShortcuts(v: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  if (!v || typeof v !== 'object') return out
+  for (const [id, keys] of Object.entries(v).slice(0, 200)) {
+    if (!/^[a-z][a-zA-Z0-9.]{0,40}$/.test(id) || !Array.isArray(keys)) continue
+    out[id] = keys.filter((k): k is string => typeof k === 'string' && k.length <= 40).slice(0, 4)
+  }
+  return out
 }

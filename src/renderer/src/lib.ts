@@ -143,7 +143,7 @@ export async function textDialog(title: string, value: string, okLabel = 'Save')
 // ------------------------------------------------------------------ uploads
 
 /** Asks what to do about name clashes; null when the user cancels. */
-async function askConflicts(prep: { dir: string; conflicts: string[] }): Promise<ConflictMode | null> {
+export async function askConflicts(prep: { dir: string; conflicts: string[] }): Promise<ConflictMode | null> {
   if (!prep.conflicts.length) return 'replace'
   const what = prep.conflicts.length === 1 ? `“${prep.conflicts[0]}” already exists` : `${prep.conflicts.length} items already exist`
   const r = await showDialog({

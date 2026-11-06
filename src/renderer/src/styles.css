@@ -632,6 +632,35 @@ code {
   background-clip: padding-box;
 }
 
+/* Find in the terminal (Ctrl+Shift+F / ⌘F). */
+.term-find {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 4px 4px 6px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.term-find input {
+  width: 200px;
+  height: 28px;
+  padding: 2px 8px;
+  font-size: 13px;
+}
+.term-find .find-count {
+  min-width: 64px;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--faint);
+  text-align: right;
+  white-space: nowrap;
+}
 .pill {
   position: absolute;
   top: 14px;
@@ -875,6 +904,27 @@ code {
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
+/* The row the keyboard is on, while the panel has the focus. */
+.sftp:focus-within .sftp-row.cursor {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* Cut rows stay dimmed until they are pasted somewhere. */
+.sftp-row.cut {
+  opacity: 0.5;
+}
+.sftp-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 6px 12px;
+  color: var(--faint);
+}
+.sftp-filter input {
+  flex: 1;
+  height: 28px;
+  padding: 2px 8px;
+  font-size: 13px;
+}
 .sftp-row .name {
   display: flex;
   align-items: center;
@@ -1111,6 +1161,54 @@ code {
     opacity: 0;
     transform: scale(0.97);
   }
+}
+
+/* F1: the keyboard shortcut sheet. */
+.modal.shortcut-sheet {
+  width: min(860px, calc(100vw - 32px));
+  outline: none;
+}
+.sheet-columns {
+  columns: 2 360px;
+  column-gap: 28px;
+}
+.sheet-columns section {
+  break-inside: avoid;
+  margin-bottom: 18px;
+}
+.sheet-columns h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.sheet-columns dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 16px;
+  margin: 0;
+}
+.sheet-columns dt {
+  color: var(--text);
+}
+.sheet-columns dd {
+  margin: 0;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--faint);
+}
+.shortcut-sheet kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--hover);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 18px;
 }
 .modal h2 {
   margin: 0;

@@ -10,7 +10,8 @@ vi.mock('electron', () => ({
   nativeImage: { createFromDataURL: () => ({}) }
 }))
 
-const { DragOut, findStandIns } = await import('../../src/main/dragout')
+const { DragOut } = await import('../../src/main/dragout')
+const { findStandIns, findStandInCopies, pathKey } = await import('../../src/main/standins')
 
 desktop.path = mkdtempSync(join(tmpdir(), 'liman-desktop-'))
 afterAll(() => rmSync(desktop.path, { recursive: true, force: true }))
@@ -40,7 +41,7 @@ describe('dragging files out', () => {
     cpSync(files[0], join(folder, 'report (2).txt'))
     cpSync(files[1], join(folder, 'site - Copy'), { recursive: true })
     const found = await findStandIns([folder], {
-      standIns: files,
+      files,
       entries,
       marker,
       dir: dirname(files[0])
@@ -49,6 +50,24 @@ describe('dragging files out', () => {
     expect(found.get(1)).toBe(join(folder, 'site - Copy'))
     rmSync(folder, { recursive: true, force: true })
     rmSync(dirname(files[0]), { recursive: true, force: true })
+  })
+
+  it('finds every pasted copy, each once', async () => {
+    const out = new DragOut(async () => {}, () => {})
+    const { files } = out.prepare('s1', entries)
+    const s = { files, entries, marker: readFileSync(files[0], 'utf8'), dir: dirname(files[0]) }
+    const a = mkdtempSync(join(tmpdir(), 'liman-paste-a-'))
+    const b = mkdtempSync(join(tmpdir(), 'liman-paste-b-'))
+    // Pasted twice into one folder (Explorer names the second "- Copy") and once into another.
+    cpSync(files[0], join(a, 'report.txt'))
+    cpSync(files[0], join(a, 'report - Copy.txt'))
+    cpSync(files[1], join(b, 'site'), { recursive: true })
+    writeFileSync(join(b, 'report.txt'), 'not ours')
+    const hits = await findStandInCopies([a, b, a], s)
+    expect(hits.map((h) => `${h.index}:${basename(h.path)}`).sort()).toEqual(['0:report - Copy.txt', '0:report.txt', '1:site'])
+    const claimed = new Set(hits.filter((h) => h.index === 0).map((h) => pathKey(h.path)))
+    expect((await findStandInCopies([a, b], s, claimed)).map((h) => h.path)).toEqual([join(b, 'site')])
+    for (const dir of [a, b, s.dir]) rmSync(dir, { recursive: true, force: true })
   })
 
   it('downloads exactly where the stand-ins landed, then cleans up', async () => {

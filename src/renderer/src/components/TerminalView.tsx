@@ -4,10 +4,30 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { SearchAddon } from '@xterm/addon-search'
 import { Loader2, RotateCw, Upload, WifiOff } from 'lucide-react'
 import type { Tab } from '../App'
-import { api, copyWithConfirm, droppedPaths, errorMessage, hasFiles, isMac, remoteDragOf, setRemoteDrag, onSessionData, showDialog, terminalThemes, uploadWithConfirm } from '../lib'
+import type { ClipContent } from '@shared/types'
+import { shQuote } from '@shared/shell'
+import {
+  api,
+  confirmDialog,
+  copyWithConfirm,
+  droppedPaths,
+  errorMessage,
+  hasFiles,
+  isMac,
+  remoteDragOf,
+  setRemoteDrag,
+  onSessionData,
+  showDialog,
+  terminalThemes,
+  uploadWithConfirm
+} from '../lib'
+import { describeItems, pasteInto } from '../paste'
+import { useShortcuts } from '../useShortcuts'
 import { SftpPanel, type Peer } from './SftpPanel'
+import { TerminalFind } from './TerminalFind'
 import { useAutoReconnect } from '../useAutoReconnect'
 import { TypeAhead, type Prediction } from '../typeahead'
 import { resetModes } from '../terminalModes'
@@ -36,9 +56,11 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
   const term = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
   const typeAhead = useRef<TypeAhead | null>(null)
+  const search = useRef<SearchAddon | null>(null)
+  const [finding, setFinding] = useState(false)
   const sessionId = useRef<string>('')
-  const live = useRef({ status: tab.status, onReconnect, onZoom })
-  live.current = { status: tab.status, onReconnect, onZoom }
+  const live = useRef({ status: tab.status, onReconnect, onZoom, paste: async (): Promise<void> => {} })
+  const lastPasteKey = useRef(0)
 
   const [drop, setDrop] = useState<{ dir?: string; remote: boolean } | null>(null)
   const dragDepth = useRef(0)
@@ -57,6 +79,82 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
   const refit = (): void => {
     if (hostEl.current && hostEl.current.clientWidth > 0) fit.current?.fit()
   }
+
+  const copySelection = (): void => {
+    const t = term.current
+    if (!t) return
+    void navigator.clipboard.writeText(t.getSelection())
+    t.clearSelection()
+  }
+
+  /**
+   * Pastes text as typing. Files (from Explorer / Finder, or copied in a files
+   * panel) and screenshots are uploaded into the shell's folder after asking.
+   */
+  const smartPaste = async (): Promise<void> => {
+    const t = term.current
+    if (!t) return
+    const content: ClipContent = await api.inspectClipboard().catch(() => ({ kind: 'none' }))
+    if (content.kind === 'none') {
+      const text = await navigator.clipboard.readText().catch(() => '')
+      if (text) t.paste(text)
+      return
+    }
+    if (tab.status !== 'connected') return
+    const sid = sessionId.current
+    try {
+      const dir = await api.getCwd(sid)
+      const what = content.kind === 'image' ? 'the screenshot' : describeItems(content.paths)
+      const verb = content.kind === 'liman' ? 'Copy' : 'Upload'
+      if (!(await confirmDialog(`${verb} ${what} here?`, `Into ${dir}, the terminal's current folder.`, verb))) return
+      await pasteInto(sid, dir, content)
+    } catch (err) {
+      await showDialog({ title: 'Paste failed', message: errorMessage(err), buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }] })
+    } finally {
+      t.focus()
+    }
+  }
+  live.current = { status: tab.status, onReconnect, onZoom, paste: smartPaste }
+
+  /** Ctrl+Enter in the files panel: `cd` the shell into that folder. */
+  const cdHere = (dir: string): void => {
+    const t = term.current
+    if (!t || tab.status !== 'connected') return
+    if (t.buffer.active.type === 'alternate') {
+      void showDialog({
+        title: "Can't change folder now",
+        message: 'A full-screen program is running in the terminal. Quit it first.',
+        buttons: [{ label: 'OK', value: 'ok', variant: 'primary' }]
+      })
+      return
+    }
+    // Ctrl+U first: whatever was typed on the prompt would end up in front of `cd`.
+    api.write(sessionId.current, `\x15cd -- ${shQuote(dir)}\r`)
+    typeAhead.current?.reset()
+    t.focus()
+  }
+
+  useShortcuts(
+    {
+      'terminal.copy': (e) => {
+        if (term.current?.hasSelection()) return copySelection()
+        // Ctrl+C with nothing selected is the shell's interrupt; Ctrl+Shift+C just does nothing.
+        return e.shiftKey ? undefined : false
+      },
+      'terminal.paste': () => {
+        lastPasteKey.current = Date.now()
+        void smartPaste()
+      },
+      'terminal.find': () => setFinding(true),
+      'terminal.clear': () => {
+        term.current?.clear()
+        typeAhead.current?.reset()
+      },
+      // htop, mc and others use F1 for their own help.
+      'help.shortcuts': () => (term.current?.buffer.active.type === 'alternate' ? 'pass' : false)
+    },
+    hostEl
+  )
 
   // Create the terminal once per tab.
   useEffect(() => {
@@ -78,6 +176,9 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     t.loadAddon(f)
     t.loadAddon(new WebLinksAddon((_e, url) => window.open(url)))
     t.loadAddon(new Unicode11Addon())
+    const s = new SearchAddon()
+    t.loadAddon(s)
+    search.current = s
     t.unicode.activeVersion = '11'
     t.open(hostEl.current!)
     // GPU rendering keeps typing and fast output smooth; the DOM renderer is the fallback.
@@ -100,14 +201,6 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     fit.current = f
     refit()
 
-    const copy = (): void => {
-      void navigator.clipboard.writeText(t.getSelection())
-      t.clearSelection()
-    }
-    const paste = (): void => {
-      void navigator.clipboard.readText().then((text) => text && t.paste(text))
-    }
-
     t.onData((d) => {
       const { status, onReconnect } = live.current
       if (status === 'connected') {
@@ -118,7 +211,7 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     })
     t.onResize(({ cols, rows }) => sessionId.current && api.resize(sessionId.current, cols, rows))
 
-    // Windows-style clipboard keys. On macOS Cmd+C / Cmd+V come from the Edit menu.
+    // Copy and paste go through the app's shortcuts (useShortcuts below); this is for word deletion.
     t.attachCustomKeyEventHandler((e) => {
       if (isMac || e.type !== 'keydown' || !e.ctrlKey || e.altKey) return true
       // Ctrl+Backspace / Ctrl+Delete delete a word as on Windows, where punctuation
@@ -130,17 +223,6 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
         if (fullScreen && e.key === 'Delete') return true
         e.preventDefault()
         t.input(e.key === 'Delete' ? '\x1bd' : fullScreen ? '\x17' : '\x1b\x7f')
-        return false
-      }
-      const k = e.key.toLowerCase()
-      if (k === 'c' && (e.shiftKey || t.hasSelection())) {
-        e.preventDefault()
-        copy()
-        return false
-      }
-      if (k === 'v') {
-        e.preventDefault()
-        paste()
         return false
       }
       return true
@@ -178,10 +260,17 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     // Right click: copy the selection, or paste when nothing is selected.
     const onContext = (e: MouseEvent): void => {
       e.preventDefault()
-      if (t.hasSelection()) copy()
-      else paste()
+      if (t.hasSelection()) copySelection()
+      else void live.current.paste()
     }
     hostEl.current!.addEventListener('contextmenu', onContext)
+    // A paste the keys didn't start (macOS Edit menu, by mouse) gets the same treatment; xterm's own is off.
+    const onPaste = (e: ClipboardEvent): void => {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (Date.now() - lastPasteKey.current > 300) void live.current.paste()
+    }
+    hostEl.current!.addEventListener('paste', onPaste, true)
 
     const ro = new ResizeObserver(() => refit())
     ro.observe(hostEl.current!)
@@ -220,11 +309,17 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
 
   useEffect(() => typeAhead.current?.setEnabled(instantTyping), [instantTyping])
 
+  // Focus follows what just appeared: the files panel when it opens, the terminal otherwise.
+  const filesWereOpen = useRef(tab.filesOpen)
   useEffect(() => {
+    const opened = tab.filesOpen && !filesWereOpen.current
+    filesWereOpen.current = tab.filesOpen
     if (!active) return
     const raf = requestAnimationFrame(() => {
       refit()
-      term.current?.focus()
+      const panel = opened ? hostEl.current?.closest('.session')?.querySelector<HTMLElement>('.sftp') : null
+      if (panel) panel.focus()
+      else term.current?.focus()
     })
     return () => cancelAnimationFrame(raf)
   }, [active, tab.filesOpen])
@@ -285,6 +380,15 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
     <div className="session" style={{ display: active ? 'flex' : 'none' }}>
       <div className="term-area" onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
         <div className="term-host" ref={hostEl} />
+        {finding && search.current && (
+          <TerminalFind
+            search={search.current}
+            onClose={() => {
+              setFinding(false)
+              term.current?.focus()
+            }}
+          />
+        )}
 
         {tab.status === 'connecting' && !retry && (
           <div className="pill">
@@ -355,7 +459,7 @@ export function TerminalView({ tab, active, theme, fontSize, instantTyping, onSe
       </div>
 
       {tab.filesOpen && (
-        <SftpPanel sessionId={tab.sessionId} connected={connected} peers={peers} onClose={onToggleFiles} />
+        <SftpPanel sessionId={tab.sessionId} connected={connected} peers={peers} onClose={onToggleFiles} onCdHere={cdHere} />
       )}
     </div>
   )

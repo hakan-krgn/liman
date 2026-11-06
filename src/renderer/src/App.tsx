@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import type { Host, HostInput, SessionStatus, Settings } from '@shared/types'
-import { api, chrome, dismissDialog, isMac, showDialog } from './lib'
+import { api, chrome, confirmDialog, dismissDialog, showDialog } from './lib'
+import { installShortcutDispatcher, setShortcutOverrides, useShortcuts } from './useShortcuts'
 import { FONT_MAX, FONT_MIN, Sidebar } from './components/Sidebar'
 import { HostForm } from './components/HostForm'
 import { TerminalView } from './components/TerminalView'
@@ -9,6 +10,7 @@ import { DialogHost } from './components/DialogHost'
 import { Transfers } from './components/Transfers'
 import { Logo } from './components/Logo'
 import { TabBar } from './components/TabBar'
+import { ShortcutSheet } from './components/ShortcutSheet'
 
 export interface Tab {
   id: string
@@ -33,6 +35,7 @@ export function App(): React.JSX.Element {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(null)
   const [renameRequest, setRenameRequest] = useState<{ id: string; seq: number } | null>(null)
+  const [sheetOpen, setSheetOpen] = useState(false)
 
   useEffect(() => {
     void api.listHosts().then(setHosts)
@@ -192,51 +195,63 @@ export function App(): React.JSX.Element {
   )
 
   // -------------------------------------------------------------- shortcuts
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      // Tab shortcuts are off while a modal is open.
-      if (document.querySelector('.overlay')) return
-      // F2 renames the active tab (inside the files panel it renames the selected file).
-      if (e.key === 'F2' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        const target = e.target as HTMLElement
-        const typing = target.tagName === 'INPUT' && !target.classList.contains('xterm-helper-textarea')
-        if (activeId && !typing && !target.closest('.sftp')) {
-          e.preventDefault()
-          e.stopPropagation()
-          setRenameRequest({ id: activeId, seq: Date.now() })
+  useEffect(() => installShortcutDispatcher(), [])
+  useEffect(() => setShortcutOverrides(settings?.shortcuts), [settings?.shortcuts])
+
+  const switchTab = (step: number): void =>
+    setActiveId((a) => {
+      if (!tabs.length) return a
+      const i = tabs.findIndex((t) => t.id === a)
+      return tabs[(i + step + tabs.length) % tabs.length].id
+    })
+
+  /** Shows or hides the active tab's files panel (the focus moves with it, see TerminalView). */
+  const toggleFiles = (): void => {
+    const tab = tabs.find((t) => t.id === activeId)
+    if (tab) patchTab(tab.id, { filesOpen: !tab.filesOpen })
+  }
+
+  const reconnectActive = async (): Promise<void> => {
+    const tab = tabs.find((t) => t.id === activeId)
+    if (!tab) return
+    if (tab.status === 'connected' && !(await confirmDialog(`Reconnect ${tab.title}?`, 'The shell running in this tab ends.', 'Reconnect'))) return
+    reconnect(tab.id)
+  }
+
+  useShortcuts({
+    'tab.next': () => switchTab(1),
+    'tab.prev': () => switchTab(-1),
+    ...Object.fromEntries(
+      Array.from({ length: 9 }, (_, i) => [
+        `tab.goto${i + 1}`,
+        () => {
+          const t = tabs[i]
+          if (t) setActiveId(t.id)
         }
-        return
-      }
-      const mod = isMac ? e.metaKey : e.ctrlKey
-      let handled = true
-      if (e.ctrlKey && e.key === 'Tab') {
-        setActiveId((a) => {
-          if (!tabs.length) return a
-          const i = tabs.findIndex((t) => t.id === a)
-          return tabs[(i + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length].id
-        })
-      } else if (mod && (isMac ? e.key === 'w' && !e.shiftKey : e.shiftKey && e.key === 'W')) {
-        if (activeId) closeTab(activeId)
-      } else if (mod && /^[1-9]$/.test(e.key) && !e.shiftKey) {
-        const t = tabs[Number(e.key) - 1]
-        if (t) setActiveId(t.id)
-      } else if (mod && !e.altKey && (e.key === '=' || e.key === '+')) {
-        zoom(1)
-      } else if (mod && !e.altKey && e.key === '-') {
-        zoom(-1)
-      } else if (mod && !e.altKey && e.key === '0') {
-        zoom(0)
-      } else {
-        handled = false
-      }
-      if (handled) {
-        e.preventDefault()
-        e.stopPropagation()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [tabs, activeId, closeTab, zoom])
+      ])
+    ),
+    'tab.close': () => {
+      if (activeId) closeTab(activeId)
+    },
+    'tab.rename': () => {
+      if (!activeId) return false
+      setRenameRequest({ id: activeId, seq: Date.now() })
+    },
+    'tab.new': () => {
+      const search = document.querySelector<HTMLInputElement>('.sidebar .search input')
+      search?.focus()
+      search?.select()
+    },
+    'tab.duplicate': () => {
+      if (activeId) duplicateTab(activeId)
+    },
+    'tab.reconnect': () => void reconnectActive(),
+    'files.toggle': toggleFiles,
+    'zoom.in': () => zoom(1),
+    'zoom.out': () => zoom(-1),
+    'zoom.reset': () => zoom(0),
+    'help.shortcuts': () => setSheetOpen(true)
+  })
 
   const active = tabs.find((t) => t.id === activeId)
   const connectedHosts = useMemo(
@@ -338,6 +353,7 @@ export function App(): React.JSX.Element {
           }}
         />
       )}
+      {sheetOpen && <ShortcutSheet onClose={() => setSheetOpen(false)} />}
       <Transfers />
       <DialogHost />
     </div>

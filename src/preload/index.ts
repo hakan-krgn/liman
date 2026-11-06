@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type {
+  ClipContent,
+  ClipEntry,
   ConflictMode,
   Host,
   HostInput,
@@ -96,6 +98,15 @@ const api = {
   onDragOutEnded: (cb: () => void) => on('dragout:ended', cb),
   /** Puts text on the system clipboard (used for OSC 52 copies from remote programs). */
   copyText: (text: string): void => ipcRenderer.send('clipboard:write', text),
+  /** Copies (or cuts) remote entries to the system clipboard, for pasting in Explorer / Finder or in Liman. */
+  copyRemote: (sessionId: string, entries: ClipEntry[], mode: 'copy' | 'cut'): Promise<void> =>
+    ipcRenderer.invoke('clipboard:copyRemote', sessionId, entries, mode),
+  /** What the clipboard holds, for a paste in Liman. */
+  inspectClipboard: (): Promise<ClipContent> => ipcRenderer.invoke('clipboard:inspect'),
+  /** Saves the image on the clipboard as a PNG file and returns its path. */
+  saveClipboardImage: (): Promise<string> => ipcRenderer.invoke('clipboard:saveImage'),
+  /** A cut was pasted in Liman: the clipboard no longer stands for those files. */
+  releaseClipboard: (): Promise<void> => ipcRenderer.invoke('clipboard:release'),
   /** Absolute path of a file dropped from the OS (Explorer / Finder / desktop). */
   pathForFile: (file: File): string => webUtils.getPathForFile(file)
 }

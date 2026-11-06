@@ -31,6 +31,8 @@ export interface Settings {
   instantTyping: boolean
   /** Sidebar groups the user folded away. */
   collapsedGroups: string[]
+  /** Keys the user changed: action id -> chords ("Ctrl+Shift+K"); [] turns an action off. */
+  shortcuts?: Record<string, string[]>
 }
 
 export type SessionStatus = 'connecting' | 'connected' | 'closed' | 'error'
@@ -53,6 +55,22 @@ export interface RemoteEntry {
 }
 
 export type ConflictMode = 'replace' | 'keepBoth'
+
+/** A remote file or folder put on the clipboard or dragged out of a files panel. */
+export interface ClipEntry {
+  path: string
+  isDir: boolean
+}
+
+/** What the system clipboard holds, as far as a paste in Liman is concerned. */
+export type ClipContent =
+  /** Remote entries copied (or cut) in a Liman files panel. */
+  | { kind: 'liman'; sessionId: string; paths: string[]; mode: 'copy' | 'cut' }
+  /** Local files, e.g. copied in Explorer or Finder. */
+  | { kind: 'files'; paths: string[] }
+  /** An image, e.g. a screenshot. */
+  | { kind: 'image' }
+  | { kind: 'none' }
 
 export interface Transfer {
   id: string

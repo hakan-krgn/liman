@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ArrowUp,
+  ClipboardPaste,
   Copy,
   Crosshair,
   Download,
@@ -9,12 +10,16 @@ import {
   FolderPlus,
   Pencil,
   RefreshCw,
+  Scissors,
+  Search,
   Send,
+  SquareTerminal,
   Trash2,
   Upload,
   X
 } from 'lucide-react'
 import type { RemoteEntry } from '@shared/types'
+import { joinPath, parentOf } from '@shared/shell'
 import {
   api,
   cachedListing,
@@ -37,6 +42,8 @@ import {
   textDialog,
   uploadWithConfirm
 } from '../lib'
+import { cancelCut, copyEntries, pasteInto, useCutPaths } from '../paste'
+import { keyHint, useShortcuts } from '../useShortcuts'
 
 /** Another open, connected tab that files can be sent to. */
 export interface Peer {
@@ -49,24 +56,34 @@ interface Props {
   connected: boolean
   peers: Peer[]
   onClose(): void
+  /** Takes the terminal's shell to this folder. */
+  onCdHere(dir: string): void
 }
 
 type Menu = { x: number; y: number; entry?: RemoteEntry }
 
-const parentOf = (p: string): string => (p === '/' ? '/' : p.replace(/\/[^/]+\/?$/, '') || '/')
-const joinPath = (dir: string, name: string): string => (dir.endsWith('/') ? dir : dir + '/') + name
+/** Height of a row in px (see .sftp-row), for paging with PgUp / PgDn. */
+const ROW_HEIGHT = 34
+/** Folders remembered for Back / Forward. */
+const HISTORY = 100
 
-export function SftpPanel({ sessionId, connected, peers, onClose }: Props): React.JSX.Element {
+export function SftpPanel({ sessionId, connected, peers, onClose, onCdHere }: Props): React.JSX.Element {
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<RemoteEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [anchor, setAnchor] = useState<string | null>(null)
+  /** The row the keyboard is on. */
+  const [cursor, setCursor] = useState<string | null>(null)
+  /** Text the list is narrowed to; null when the filter box is closed. */
+  const [filter, setFilter] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [width, setWidth] = useState(400)
+  const panelEl = useRef<HTMLElement>(null)
+  const listEl = useRef<HTMLDivElement>(null)
   const dragDepth = useRef(0)
   const crumbsEl = useRef<HTMLDivElement>(null)
   const menuEl = useRef<HTMLDivElement>(null)
@@ -74,6 +91,12 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
   pathRef.current = path
   const loadSeq = useRef(0)
   const hoverTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  /** Folders visited, for Back / Forward, and whether the next folder shown is a new visit. */
+  const history = useRef<{ list: string[]; at: number; visiting: boolean }>({ list: [], at: -1, visiting: true })
+  const typed = useRef({ text: '', at: 0 })
+  const cutPaths = useCutPaths(sessionId)
+
+  const visible = filter ? entries.filter((e) => e.name.toLowerCase().includes(filter.toLowerCase())) : entries
 
   const fail = (e: unknown): void => {
     void showDialog({
@@ -91,11 +114,20 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     if (!samePath) {
       setSelected(new Set())
       setAnchor(null)
+      setCursor(null)
+      setFilter(null)
+      const h = history.current
+      if (h.visiting) {
+        h.list = [...h.list.slice(0, h.at + 1), res.path].slice(-HISTORY)
+        h.at = h.list.length - 1
+      }
     } else {
       const still = new Set(res.entries.map((e) => e.path))
       setSelected((sel) => new Set([...sel].filter((p) => still.has(p))))
       setAnchor((a) => (a && still.has(a) ? a : null))
+      setCursor((c) => (c && still.has(c) ? c : null))
     }
+    history.current.visiting = true
   }, [])
 
   /** Shows a cached listing right away (unless `fresh`), then refreshes it from the server. */
@@ -124,6 +156,16 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     [sessionId, show]
   )
 
+  /** Back (-1) or Forward (+1) through the folders visited. */
+  const step = (by: -1 | 1): void => {
+    const h = history.current
+    const to = h.at + by
+    if (to < 0 || to >= h.list.length) return
+    h.at = to
+    h.visiting = false
+    void load(h.list[to])
+  }
+
   /** Hovering a folder briefly loads it in the background, so opening it is instant. */
   const prefetch = (item: RemoteEntry): void => {
     clearTimeout(hoverTimer.current)
@@ -141,7 +183,7 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     if (connected && sessionId) void goToTerminalDir()
   }, [connected, sessionId, goToTerminalDir])
 
-  // Refresh when an upload into the visible folder finishes.
+  // Refresh when an upload or copy into the visible folder finishes.
   useEffect(
     () =>
       api.onTransfer((t) => {
@@ -163,8 +205,16 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     }
   }, [menu])
 
+  // Keep the keyboard's row in view.
+  useEffect(() => {
+    if (!cursor) return
+    listEl.current?.querySelector(`[data-path="${CSS.escape(cursor)}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [cursor])
+
+  const focusPanel = (): void => panelEl.current?.focus()
+
   // ---------------------------------------------------------------- actions
-  const selection = (): RemoteEntry[] => entries.filter((e) => selected.has(e.path))
+  const selection = (): RemoteEntry[] => visible.filter((e) => selected.has(e.path))
 
   const download = (items: RemoteEntry[]): void => {
     if (sessionId && items.length) api.download(sessionId, items.map((i) => i.path)).catch(fail)
@@ -211,18 +261,39 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     if (sessionId && items.length) copyWithConfirm(sessionId, items.map((i) => i.path), peer.sessionId).catch(fail)
   }
 
+  /** Ctrl+C / Ctrl+X: onto the system clipboard, for Explorer / Finder or another Liman panel. */
+  const copySelection = (mode: 'copy' | 'cut', items = selection()): void => {
+    if (!sessionId || !items.length) return
+    copyEntries(sessionId, items.map((i) => ({ path: i.path, isDir: i.isDir })), mode).catch(fail)
+  }
+
+  /** Ctrl+V: files from Explorer / Finder, a screenshot, or what Liman copied, into `dir`. */
+  const paste = async (dir = path): Promise<void> => {
+    if (!sessionId) return
+    try {
+      const pasted = await pasteInto(sessionId, dir, await api.inspectClipboard())
+      if (pasted) void load(path, true)
+    } catch (e) {
+      fail(e)
+    }
+  }
+
   const open = (item: RemoteEntry): void => {
     if (item.isDir) void load(item.path)
     else download([item])
   }
 
+  /** The folder an action on the selection is about: a single selected folder, or the open one. */
+  const selectedFolder = (): string => {
+    const sel = selection()
+    return sel.length === 1 && sel[0].isDir ? sel[0].path : path
+  }
+
   const onRowClick = (e: React.MouseEvent, item: RemoteEntry): void => {
     const multi = isMac ? e.metaKey : e.ctrlKey
+    setCursor(item.path)
     if (e.shiftKey && anchor) {
-      const a = entries.findIndex((x) => x.path === anchor)
-      const b = entries.findIndex((x) => x.path === item.path)
-      const [from, to] = a < b ? [a, b] : [b, a]
-      setSelected(new Set(entries.slice(from, to + 1).map((x) => x.path)))
+      selectRange(anchor, item.path)
       return
     }
     setAnchor(item.path)
@@ -236,17 +307,99 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     }
   }
 
-  const onKeyDown = (e: React.KeyboardEvent): void => {
-    if ((e.target as HTMLElement).tagName === 'INPUT') return
-    const sel = selection()
-    if (e.key === 'Delete' || (isMac && e.key === 'Backspace' && e.metaKey)) void remove(sel)
-    else if (e.key === 'Backspace') void load(parentOf(path))
-    else if (e.key === 'Enter' && sel.length === 1) open(sel[0])
-    else if (e.key === 'F2' && sel.length === 1) void rename(sel[0])
-    else if ((isMac ? e.metaKey : e.ctrlKey) && e.key === 'a') setSelected(new Set(entries.map((x) => x.path)))
-    else return
-    e.preventDefault()
+  const selectRange = (from: string, to: string): void => {
+    const a = visible.findIndex((x) => x.path === from)
+    const b = visible.findIndex((x) => x.path === to)
+    const [lo, hi] = a < b ? [a, b] : [b, a]
+    setSelected(new Set(visible.slice(Math.max(0, lo), hi + 1).map((x) => x.path)))
   }
+
+  /** Puts the keyboard on row `index`; with Shift the selection grows from the anchor. */
+  const moveTo = (index: number, extend: boolean): void => {
+    if (!visible.length) return
+    const item = visible[Math.max(0, Math.min(visible.length - 1, index))]
+    setCursor(item.path)
+    if (extend) {
+      const from = anchor ?? cursor ?? item.path
+      setAnchor(from)
+      selectRange(from, item.path)
+    } else {
+      setAnchor(item.path)
+      setSelected(new Set([item.path]))
+    }
+  }
+
+  // Keys that aren't shortcuts: moving through the list, and typing a name to jump to it.
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    if ((e.target as HTMLElement).tagName === 'INPUT' || e.ctrlKey || e.metaKey || e.altKey) return
+    const at = visible.findIndex((x) => x.path === cursor)
+    const page = Math.max(1, Math.floor((listEl.current?.clientHeight ?? 340) / ROW_HEIGHT) - 1)
+    const targets: Record<string, number> = {
+      ArrowDown: at + 1,
+      ArrowUp: at < 0 ? 0 : at - 1,
+      Home: 0,
+      End: visible.length - 1,
+      PageDown: Math.max(at, 0) + page,
+      PageUp: Math.max(at, 0) - page
+    }
+    if (e.key in targets) {
+      e.preventDefault()
+      moveTo(targets[e.key], e.shiftKey)
+      return
+    }
+    if (e.key.length !== 1 || e.key === ' ') return
+    e.preventDefault()
+    const t = typed.current
+    const now = Date.now()
+    t.text = now - t.at < 1000 ? t.text + e.key.toLowerCase() : e.key.toLowerCase()
+    t.at = now
+    // Pressing one letter again goes on to the next name that starts with it.
+    const again = [...t.text].every((c) => c === t.text[0])
+    const prefix = again ? t.text[0] : t.text
+    const start = again ? at + 1 : 0
+    const order = [...visible.slice(start), ...visible.slice(0, start)]
+    const hit = order.find((x) => x.name.toLowerCase().startsWith(prefix))
+    if (hit) moveTo(visible.indexOf(hit), false)
+  }
+
+  useShortcuts(
+    {
+      'files.copy': () => copySelection('copy'),
+      'files.cut': () => copySelection('cut'),
+      'files.paste': () => void paste(),
+      'files.refresh': () => void load(path, true),
+      'files.open': () => {
+        const sel = selection()
+        if (sel.length === 1) open(sel[0])
+      },
+      'files.up': () => void load(parentOf(path)),
+      'files.back': () => step(-1),
+      'files.forward': () => step(1),
+      // Handled even with nothing selected: F2 in the panel never renames the tab.
+      'files.rename': () => {
+        const sel = selection()
+        if (sel.length === 1) void rename(sel[0])
+      },
+      'files.delete': () => void remove(selection()),
+      'files.newFolder': () => void newFolder(),
+      'files.download': () => download(selection()),
+      'files.copyPath': () => {
+        const sel = selection()
+        void navigator.clipboard.writeText(sel.length ? sel.map((i) => i.path).join('\n') : path)
+      },
+      'files.cdHere': () => onCdHere(selectedFolder()),
+      'files.filter': () => setFilter((f) => f ?? ''),
+      'files.goTo': () => setEditing(true),
+      'files.selectAll': () => setSelected(new Set(visible.map((x) => x.path))),
+      'files.escape': () => {
+        if (cancelCut()) return
+        if (filter !== null) return setFilter(null)
+        if (selected.size) return setSelected(new Set())
+        return false
+      }
+    },
+    panelEl
+  )
 
   // ------------------------------------------------------------ drag & drop
   const upload = (paths: string[], dir: string): void => {
@@ -364,8 +517,17 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
     if (crumbsEl.current) crumbsEl.current.scrollLeft = crumbsEl.current.scrollWidth
   }, [path, editing])
 
+  /** A menu item with its shortcut on the right. */
+  const menuItem = (icon: React.ReactNode, label: string, shortcut: string, run: () => void, className?: string): React.JSX.Element => (
+    <button className={className} onClick={() => (setMenu(null), run())}>
+      {icon} {label}
+      {shortcut && <kbd className="menu-key">{keyHint(shortcut)}</kbd>}
+    </button>
+  )
+
   return (
     <section
+      ref={panelEl}
       className={`sftp ${dropTarget === path ? 'drop-here' : ''}`}
       style={{ width }}
       tabIndex={0}
@@ -375,7 +537,12 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
       <div className="resizer" onMouseDown={startResize} />
 
       <div className="sftp-bar">
-        <button className="icon-btn" onClick={() => void load(parentOf(path))} disabled={path === '/'} title="Up">
+        <button
+          className="icon-btn"
+          onClick={() => void load(parentOf(path))}
+          disabled={path === '/'}
+          title={`Up (${keyHint('files.up')})`}
+        >
           <ArrowUp size={15} />
         </button>
         {editing ? (
@@ -383,17 +550,23 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
             className="path-input"
             autoFocus
             defaultValue={path}
+            // Selected, so typing replaces it (as in Explorer's address bar).
+            onFocus={(e) => e.currentTarget.select()}
             spellCheck={false}
             onBlur={() => setEditing(false)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 setEditing(false)
                 void load((e.target as HTMLInputElement).value.trim() || '/')
-              } else if (e.key === 'Escape') setEditing(false)
+                focusPanel()
+              } else if (e.key === 'Escape') {
+                setEditing(false)
+                focusPanel()
+              }
             }}
           />
         ) : (
-          <div className="crumbs" ref={crumbsEl} onDoubleClick={() => setEditing(true)} title="Double-click to type a path">
+          <div className="crumbs" ref={crumbsEl} onDoubleClick={() => setEditing(true)} title={`Double-click (or ${keyHint('files.goTo')}) to type a path`}>
             {crumbs.map((c, i) => {
               const target = crumbs.slice(0, i + 1).join('/') || '/'
               return (
@@ -408,16 +581,43 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
         <button className="icon-btn" onClick={() => void goToTerminalDir()} title="Go to terminal's folder">
           <Crosshair size={15} />
         </button>
-        <button className="icon-btn" onClick={() => void newFolder()} title="New folder">
+        <button className="icon-btn" onClick={() => void newFolder()} title={`New folder (${keyHint('files.newFolder')})`}>
           <FolderPlus size={15} />
         </button>
-        <button className="icon-btn" onClick={() => void load(path, true)} title="Refresh">
+        <button className="icon-btn" onClick={() => void load(path, true)} title={`Refresh (${keyHint('files.refresh')})`}>
           <RefreshCw size={15} className={loading ? 'spin' : ''} />
         </button>
         <button className="icon-btn" onClick={onClose} title="Close">
           <X size={15} />
         </button>
       </div>
+
+      {filter !== null && (
+        <div className="sftp-filter">
+          <Search size={13} />
+          <input
+            autoFocus
+            value={filter}
+            placeholder="Filter this folder"
+            spellCheck={false}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setFilter(null)
+                focusPanel()
+              } else if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                e.preventDefault()
+                focusPanel()
+                moveTo(0, false)
+              }
+            }}
+          />
+          <button className="icon-btn" onClick={() => (setFilter(null), focusPanel())} title="Clear filter (Esc)">
+            <X size={13} />
+          </button>
+        </div>
+      )}
 
       <div className="sftp-head">
         <span>Name</span>
@@ -426,6 +626,7 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
       </div>
 
       <div
+        ref={listEl}
         className="sftp-list"
         onMouseDown={(e) => e.target === e.currentTarget && setSelected(new Set())}
         onContextMenu={(e) => {
@@ -437,17 +638,28 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
         {!connected && <div className="sftp-empty">Not connected</div>}
         {connected && error && <div className="sftp-empty error">{error}</div>}
         {connected && !error && entries.length === 0 && !loading && <div className="sftp-empty">Empty folder</div>}
-        {entries.map((item) => (
+        {connected && !error && entries.length > 0 && visible.length === 0 && <div className="sftp-empty">No matches</div>}
+        {visible.map((item) => (
           <div
             key={item.path}
-            className={`sftp-row ${selected.has(item.path) ? 'sel' : ''} ${dropTarget === item.path ? 'drop' : ''}`}
+            className={[
+              'sftp-row',
+              selected.has(item.path) && 'sel',
+              cursor === item.path && 'cursor',
+              cutPaths?.has(item.path) && 'cut',
+              dropTarget === item.path && 'drop'
+            ]
+              .filter(Boolean)
+              .join(' ')}
             onMouseDown={(e) => e.button === 0 && onRowClick(e, item)}
             onDoubleClick={() => open(item)}
             onContextMenu={(e) => {
               e.preventDefault()
               if (!selected.has(item.path)) setSelected(new Set([item.path]))
+              setCursor(item.path)
               setMenu({ x: e.clientX, y: e.clientY, entry: item })
             }}
+            data-path={item.path}
             data-dir={item.isDir ? item.path : undefined}
             draggable
             onDragStart={(e) => startRowDrag(e, item)}
@@ -466,24 +678,22 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
       </div>
 
       <div className="sftp-foot">
-        <Upload size={13} /> Drop files here · drag rows to another server's tab
+        <Upload size={13} /> Drop or paste ({keyHint('files.paste')}) files here · F1 for all shortcuts
       </div>
 
       {menu && (
         <div className="menu" ref={menuEl} style={{ left: menu.x, top: menu.y }} onMouseDown={(e) => e.stopPropagation()}>
           {menu.entry ? (
             <>
-              <button onClick={() => (setMenu(null), download(selection()))}>
-                <Download size={14} /> Download
-              </button>
-              {selected.size <= 1 && (
-                <button onClick={() => (setMenu(null), void rename(menu.entry!))}>
-                  <Pencil size={14} /> Rename
-                </button>
-              )}
-              <button onClick={() => (setMenu(null), void navigator.clipboard.writeText(menu.entry!.path))}>
-                <Copy size={14} /> Copy path
-              </button>
+              {menuItem(<Download size={14} />, 'Download', 'files.download', () => download(selection()))}
+              {menuItem(<Copy size={14} />, 'Copy', 'files.copy', () => copySelection('copy'))}
+              {menuItem(<Scissors size={14} />, 'Cut', 'files.cut', () => copySelection('cut'))}
+              {menu.entry.isDir &&
+                selected.size <= 1 &&
+                menuItem(<ClipboardPaste size={14} />, `Paste into ${menu.entry.name}`, '', () => void paste(menu.entry!.path))}
+              {selected.size <= 1 && menuItem(<Pencil size={14} />, 'Rename', 'files.rename', () => void rename(menu.entry!))}
+              {menuItem(<Copy size={14} />, 'Copy path', 'files.copyPath', () => void navigator.clipboard.writeText(menu.entry!.path))}
+              {menuItem(<SquareTerminal size={14} />, 'Open in terminal', 'files.cdHere', () => onCdHere(menu.entry!.isDir ? menu.entry!.path : path))}
               {peers.length > 0 && (
                 <>
                   <hr />
@@ -496,18 +706,14 @@ export function SftpPanel({ sessionId, connected, peers, onClose }: Props): Reac
                 </>
               )}
               <hr />
-              <button className="danger-text" onClick={() => (setMenu(null), void remove(selection()))}>
-                <Trash2 size={14} /> Delete
-              </button>
+              {menuItem(<Trash2 size={14} />, 'Delete', 'files.delete', () => void remove(selection()), 'danger-text')}
             </>
           ) : (
             <>
-              <button onClick={() => (setMenu(null), void newFolder())}>
-                <FolderPlus size={14} /> New folder
-              </button>
-              <button onClick={() => (setMenu(null), void load(path, true))}>
-                <RefreshCw size={14} /> Refresh
-              </button>
+              {menuItem(<ClipboardPaste size={14} />, 'Paste', 'files.paste', () => void paste())}
+              {menuItem(<FolderPlus size={14} />, 'New folder', 'files.newFolder', () => void newFolder())}
+              {menuItem(<RefreshCw size={14} />, 'Refresh', 'files.refresh', () => void load(path, true))}
+              {menuItem(<SquareTerminal size={14} />, 'Open in terminal', 'files.cdHere', () => onCdHere(path))}
             </>
           )}
         </div>
